@@ -1,5 +1,6 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { ReactNode, useState, useEffect } from "react";
 import { RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,6 +8,7 @@ import { Button } from "@/components/ui/button";
 interface ProtectedRouteProps {
   children: ReactNode;
   requiredRoles?: string[];
+  allowGuests?: boolean; // Allow guest users without login
 }
 
 function LoadingScreen({ timedOut }: { timedOut: boolean }) {
@@ -61,8 +63,9 @@ function LoadingScreen({ timedOut }: { timedOut: boolean }) {
   );
 }
 
-export const ProtectedRoute = ({ children, requiredRoles }: ProtectedRouteProps) => {
+export const ProtectedRoute = ({ children, requiredRoles, allowGuests }: ProtectedRouteProps) => {
   const { user, role, loading, profileReady } = useAuth();
+  const { isGuestMode } = useGuest();
   const [timedOut, setTimedOut] = useState(false);
 
   // Hard 10-second timeout — never leave users stuck on a blank loading screen
@@ -71,6 +74,16 @@ export const ProtectedRoute = ({ children, requiredRoles }: ProtectedRouteProps)
     const t = setTimeout(() => setTimedOut(true), 10_000);
     return () => clearTimeout(t);
   }, [loading]);
+
+  // Allow guest access if enabled and guest is in session
+  if (allowGuests && isGuestMode && requiredRoles === undefined) {
+    return <>{children}</>;
+  }
+
+  // Guest users trying to access role-restricted pages should go back to login
+  if (isGuestMode && (requiredRoles || !allowGuests)) {
+    return <Navigate to="/login" replace />;
+  }
 
   // Auth session still loading
   if (loading) return <LoadingScreen timedOut={timedOut} />;
