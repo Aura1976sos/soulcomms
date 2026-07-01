@@ -71,7 +71,7 @@ export function EventAccessTokenManager({ eventId, eventName }: EventAccessToken
                     title: 'Success',
                     description: 'Access token created successfully',
                 });
-                
+
                 // Copy URL to clipboard automatically
                 await copyToClipboard(shareUrl);
                 toast({
@@ -80,27 +80,18 @@ export function EventAccessTokenManager({ eventId, eventName }: EventAccessToken
                 });
 
                 await loadTokens();
+            } else {
+                toast({
+                    title: 'Error',
+                    description: 'Failed to create access token - database function may not be deployed yet',
+                    variant: 'destructive',
+                });
             }
         } catch (error) {
             console.error('Failed to create token:', error);
             toast({
                 title: 'Error',
-                description: 'Failed to create access token',
-                variant: 'destructive',
-            });
-        } finally {
-            setCreating(false);
-        }
-    };
-
-    const handleRevokeToken = async (token: string) => {
-        try {
-            const success = await revokeEventAccessToken(token);
-            if (success) {
-                toast({
-                    title: 'Success',
-                    description: 'Access token revoked',
-                });
+                description: error instanceof Error ? error.message : 'Failed to create access token',
                 await loadTokens();
             } else {
                 toast({
