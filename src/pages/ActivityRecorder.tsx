@@ -23,6 +23,7 @@ import {
 import { speak, VM } from "@/lib/voice";
 import { useNavigate } from "react-router-dom";
 import { trackEvent } from "@enter-pro/analytics-sdk";
+import { recordActivityCheckin } from "@/lib/activityTimeTracking";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type AppTab = "recorder" | "validator";
@@ -265,6 +266,9 @@ export default function ActivityRecorder() {
           event_id: eventId,
         }));
       }
+      
+      // Track time spent on activity (auto-checkout previous activity)
+      await recordActivityCheckin(eventId, foundParticipant.id, activity.id);
     }
 
     // Flash green feedback
