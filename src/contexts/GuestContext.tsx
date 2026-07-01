@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useAuth } from './AuthContext';
 
 export interface GuestSession {
     eventId: string;
@@ -20,9 +21,22 @@ const GuestContext = createContext<GuestContextType | undefined>(undefined);
 
 export function GuestProvider({ children }: { children: React.ReactNode }) {
     const [guestSession, setGuestSession] = useState<GuestSession | null>(null);
+    const { user, loading: authLoading } = useAuth();
 
     // Load guest session from localStorage on mount
     useEffect(() => {
+        // Only load guest session if user is not authenticated
+        // If user is authenticated, guest mode should be disabled
+        if (authLoading) return; // Wait for auth to load
+        
+        if (user) {
+            // User is authenticated - clear guest session
+            localStorage.removeItem('guest_session');
+            setGuestSession(null);
+            return;
+        }
+
+        // User is not authenticated - load guest session if available
         const stored = localStorage.getItem('guest_session');
         if (stored) {
             try {
@@ -38,7 +52,7 @@ export function GuestProvider({ children }: { children: React.ReactNode }) {
                 localStorage.removeItem('guest_session');
             }
         }
-    }, []);
+    }, [user, authLoading]);
 
     // Persist guest session to localStorage
     const handleSetGuestSession = (session: GuestSession | null) => {
@@ -61,7 +75,7 @@ export function GuestProvider({ children }: { children: React.ReactNode }) {
             value={{
                 guestSession,
                 setGuestSession: handleSetGuestSession,
-                isGuestMode: guestSession !== null,
+                isGuestMode: guestSession !== null && !user,
                 clearGuestSession,
             }}
         >

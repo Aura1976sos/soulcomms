@@ -140,8 +140,8 @@ export default function CrewMembers() {
 
   const exportCsv = () => {
     const rows = [["Code", "Name", "Department", "Phone", "Checked In", "Check-In Time"],
-      ...crew.map(c => [c.code, c.name, c.department ?? "", c.phone ?? "",
-        c.is_checked_in ? "Yes" : "No", c.checked_in_at ?? ""])];
+    ...crew.map(c => [c.code, c.name, c.department ?? "", c.phone ?? "",
+    c.is_checked_in ? "Yes" : "No", c.checked_in_at ?? ""])];
     const csv = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);

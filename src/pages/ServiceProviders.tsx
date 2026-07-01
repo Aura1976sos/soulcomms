@@ -140,8 +140,8 @@ export default function ServiceProviders() {
 
   const exportCsv = () => {
     const rows = [["Code", "Brand Name", "Contact Person", "Phone", "Checked In", "Check-In Time"],
-      ...providers.map(p => [p.code, p.brand_name, p.contact_person ?? "", p.phone ?? "",
-        p.is_checked_in ? "Yes" : "No", p.checked_in_at ?? ""])];
+    ...providers.map(p => [p.code, p.brand_name, p.contact_person ?? "", p.phone ?? "",
+    p.is_checked_in ? "Yes" : "No", p.checked_in_at ?? ""])];
     const csv = rows.map(r => r.map(c => `"${c}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
