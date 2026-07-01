@@ -1,0 +1,3 @@
+-- Add description and archive support to comm_channels
+ALTER TABLE comm_channels ADD COLUMN IF NOT EXISTS description text;
+ALTER TABLE comm_channels ADD COLUMN IF NOT EXISTS is_archived  boolean DEFAULT false;

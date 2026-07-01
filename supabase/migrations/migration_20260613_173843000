@@ -1,0 +1,8 @@
+-- Add source tracking to participants
+ALTER TABLE participants ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'CSV Import';
+ALTER TABLE participants DROP CONSTRAINT IF EXISTS participants_source_check;
+ALTER TABLE participants ADD CONSTRAINT participants_source_check
+  CHECK (source IN ('CSV Import', 'Walk-In', 'QR Registration'));
+
+-- Backfill existing rows
+UPDATE participants SET source = 'CSV Import' WHERE source IS NULL;

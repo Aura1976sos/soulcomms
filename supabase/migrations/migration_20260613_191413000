@@ -1,0 +1,7 @@
+-- Fix: allow checkin_officer and event_admin to INSERT participants
+DROP POLICY IF EXISTS participants_insert ON participants;
+CREATE POLICY participants_insert ON participants
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    get_my_role() IN ('admin', 'event_admin', 'checkin_officer')
+  );

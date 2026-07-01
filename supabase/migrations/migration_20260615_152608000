@@ -1,0 +1,52 @@
+-- ─── Activity Sessions ───────────────────────────────────────────────────────
+CREATE TABLE activity_sessions (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  activity_id  UUID NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+  event_id     UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  session_date DATE,
+  start_time   TIME NOT NULL,
+  end_time     TIME NOT NULL,
+  capacity     INTEGER,
+  location     TEXT,
+  status       TEXT DEFAULT 'scheduled'
+               CHECK (status IN ('scheduled','active','completed','cancelled')),
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  created_by   UUID REFERENCES staff_profiles(id)
+);
+
+ALTER TABLE activity_sessions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "sessions_select"       ON activity_sessions FOR SELECT USING (true);
+CREATE POLICY "sessions_insert_admin" ON activity_sessions FOR INSERT WITH CHECK (get_my_role() = ANY(ARRAY['admin','event_admin']));
+CREATE POLICY "sessions_update_admin" ON activity_sessions FOR UPDATE USING (get_my_role() = ANY(ARRAY['admin','event_admin']));
+CREATE POLICY "sessions_delete_admin" ON activity_sessions FOR DELETE USING (get_my_role() = ANY(ARRAY['admin','event_admin']));
+
+-- ─── Session Participations ───────────────────────────────────────────────────
+CREATE TABLE session_participations (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id         UUID NOT NULL REFERENCES activity_sessions(id),
+  activity_id        UUID NOT NULL REFERENCES activities(id),
+  event_id           UUID NOT NULL REFERENCES events(id),
+  participant_id     UUID REFERENCES participants(id),
+  participant_code   TEXT NOT NULL,
+  participant_name   TEXT NOT NULL,
+  participation_code TEXT NOT NULL,
+  generated_by       UUID REFERENCES staff_profiles(id),
+  generated_at       TIMESTAMPTZ DEFAULT NOW(),
+  verified_at        TIMESTAMPTZ,
+  verified_by        UUID REFERENCES staff_profiles(id),
+  status             TEXT DEFAULT 'generated'
+                     CHECK (status IN ('generated','verified','cancelled')),
+  CONSTRAINT sp_code_unique         UNIQUE (participation_code),
+  CONSTRAINT sp_session_participant UNIQUE (session_id, participant_id)
+);
+
+ALTER TABLE session_participations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "sp_select"        ON session_participations FOR SELECT USING (true);
+CREATE POLICY "sp_insert"        ON session_participations FOR INSERT WITH CHECK (get_my_role() = ANY(ARRAY['admin','event_admin','activity_officer','staff']));
+CREATE POLICY "sp_update"        ON session_participations FOR UPDATE USING (get_my_role() = ANY(ARRAY['admin','event_admin','activity_officer','staff']));
+CREATE POLICY "sp_delete_admin"  ON session_participations FOR DELETE USING (get_my_role() = ANY(ARRAY['admin','event_admin']));
+
+CREATE INDEX sp_session_idx  ON session_participations (session_id);
+CREATE INDEX sp_event_idx    ON session_participations (event_id);
+CREATE INDEX sp_code_idx     ON session_participations (participation_code);
+CREATE INDEX sessions_activity_idx ON activity_sessions (activity_id);

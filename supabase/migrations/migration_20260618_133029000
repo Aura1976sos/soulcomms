@@ -1,0 +1,30 @@
+
+-- Critical indexes for frequently-queried columns
+-- These eliminate full-table scans on the most-used tables
+
+-- Participants: event_id (all check-in lookups, dashboard counts)
+CREATE INDEX IF NOT EXISTS idx_participants_event_id ON participants(event_id);
+
+-- Activity logs: event_id (dashboard stats, activity recorder)
+CREATE INDEX IF NOT EXISTS idx_activity_logs_event_id ON activity_logs(event_id);
+
+-- Activity logs: compound (event_id + activity_id) for get_dashboard_stats aggregation
+CREATE INDEX IF NOT EXISTS idx_activity_logs_event_activity ON activity_logs(event_id, activity_id);
+
+-- Activity logs: participant lookup by event + participant
+CREATE INDEX IF NOT EXISTS idx_activity_logs_event_participant ON activity_logs(event_id, participant_id);
+
+-- Session participations: event_id
+CREATE INDEX IF NOT EXISTS idx_session_participations_event_id ON session_participations(event_id);
+
+-- Session participations: compound for dashboard stats aggregation
+CREATE INDEX IF NOT EXISTS idx_session_participations_event_activity ON session_participations(event_id, activity_id);
+
+-- Comm messages: channel_id + created_at (unread count queries)
+CREATE INDEX IF NOT EXISTS idx_comm_messages_channel_created ON comm_messages(channel_id, created_at);
+
+-- Comm channel members: staff_id lookup
+CREATE INDEX IF NOT EXISTS idx_comm_channel_members_staff ON comm_channel_members(staff_id);
+
+-- Comm mentions: mentioned_staff_id + seen_at (mention count)
+CREATE INDEX IF NOT EXISTS idx_comm_mentions_staff_seen ON comm_mentions(mentioned_staff_id, seen_at);

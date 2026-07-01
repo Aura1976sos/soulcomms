@@ -1,0 +1,12 @@
+
+-- Create a view for participant activity counts (used for leaderboard)
+CREATE OR REPLACE VIEW participant_activity_counts AS
+SELECT 
+  p.id,
+  p.code,
+  p.name,
+  p.is_checked_in,
+  COUNT(al.id) AS activity_count
+FROM participants p
+LEFT JOIN activity_logs al ON al.participant_id = p.id
+GROUP BY p.id, p.code, p.name, p.is_checked_in;

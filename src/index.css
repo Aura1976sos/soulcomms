@@ -1,0 +1,179 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── SOULCOMMS Brand: Red · White · Black ── */
+
+    /* True black backgrounds */
+    --background: 0 0% 5%;
+    --foreground: 0 0% 95%;
+
+    --card: 0 0% 9%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 95%;
+
+    /* SOULCOMMS Red */
+    --primary: 0 85% 52%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 0 0% 90%;
+
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 46%;
+
+    --accent: 0 0% 14%;
+    --accent-foreground: 0 0% 95%;
+
+    --destructive: 0 85% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 72% 45%;
+    --success-foreground: 0 0% 5%;
+
+    --border: 0 0% 18%;
+    --input: 0 0% 14%;
+    --ring: 0 85% 52%;
+
+    --radius: 0.75rem;
+
+    /* Sidebar — near black */
+    --sidebar-background: 0 0% 7%;
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: 0 85% 52%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 12%;
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 0 0% 13%;
+    --sidebar-ring: 0 85% 52%;
+
+    /* Glow tokens — red */
+    --glow-primary: 0 0 12px hsl(0 85% 52% / 0.55), 0 0 32px hsl(0 85% 52% / 0.22);
+    --glow-success: 0 0 12px hsl(142 72% 45% / 0.55);
+    --glow-error: 0 0 12px hsl(0 85% 52% / 0.55);
+    --glass-border: hsl(0 85% 52% / 0.14);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+
+/* Scan input pulse animation — red glow */
+@keyframes scan-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px hsl(0 85% 52% / 0.18), 0 0 12px hsl(0 85% 52% / 0.30); }
+  50% { box-shadow: 0 0 0 5px hsl(0 85% 52% / 0.30), 0 0 24px hsl(0 85% 52% / 0.52); }
+}
+
+.scan-pulse:focus {
+  animation: scan-pulse 1.5s ease-in-out infinite;
+}
+
+/* Counter number animation */
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.count-animate {
+  animation: count-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Slide up animation for result card */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.slide-up {
+  animation: slide-up 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* Staggered fade in */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in-up {
+  animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Progress bar fill animation */
+@keyframes fill-bar {
+  from { width: 0%; }
+}
+
+/* Red glow pulse for active elements */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: var(--glow-primary); }
+  50% { box-shadow: 0 0 20px hsl(0 85% 52% / 0.80), 0 0 48px hsl(0 85% 52% / 0.38); }
+}
+
+.glow-pulse {
+  animation: glow-pulse 2.5s ease-in-out infinite;
+}
+
+/* Glass card style */
+.glass-card {
+  background: hsl(var(--card) / 0.80);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--glass-border);
+}
+
+@keyframes scanner-line {
+  0%   { top: 0; }
+  50%  { top: calc(100% - 2px); }
+  100% { top: 0; }
+}
+
+.scanner-line {
+  animation: scanner-line 1.8s ease-in-out infinite;
+}
+
+/* Form field label utility */
+.field-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  margin-bottom: 0.375rem;
+}

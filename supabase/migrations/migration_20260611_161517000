@@ -1,0 +1,60 @@
+-- Extend staff_profiles with new fields
+ALTER TABLE staff_profiles
+  ADD COLUMN IF NOT EXISTS phone TEXT,
+  ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active',
+  ADD COLUMN IF NOT EXISTS assigned_event_id UUID REFERENCES events(id),
+  ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+
+-- Drop old role check and recreate with expanded roles
+ALTER TABLE staff_profiles DROP CONSTRAINT IF EXISTS staff_profiles_role_check;
+ALTER TABLE staff_profiles ADD CONSTRAINT staff_profiles_role_check
+  CHECK (role IN (
+    'admin','event_admin','checkin_officer',
+    'activity_coordinator','crew_manager','sp_manager','viewer'
+  ));
+
+-- Status check
+ALTER TABLE staff_profiles DROP CONSTRAINT IF EXISTS staff_profiles_status_check;
+ALTER TABLE staff_profiles ADD CONSTRAINT staff_profiles_status_check
+  CHECK (status IN ('active','disabled','suspended'));
+
+-- RLS: allow admin to see all profiles (currently only own)
+DROP POLICY IF EXISTS "staff_select_own" ON staff_profiles;
+DROP POLICY IF EXISTS "staff_select_admin" ON staff_profiles;
+CREATE POLICY "staff_select_own"   ON staff_profiles FOR SELECT USING (id = auth.uid());
+CREATE POLICY "staff_select_admin" ON staff_profiles FOR SELECT TO authenticated
+  USING (get_my_role() = 'admin');
+
+-- Allow admin to update any profile
+DROP POLICY IF EXISTS "staff_update_admin" ON staff_profiles;
+CREATE POLICY "staff_update_admin" ON staff_profiles FOR UPDATE TO authenticated
+  USING (get_my_role() = 'admin');
+
+-- Allow user to update own last_seen_at
+DROP POLICY IF EXISTS "staff_update_own_seen" ON staff_profiles;
+CREATE POLICY "staff_update_own_seen" ON staff_profiles FOR UPDATE TO authenticated
+  USING (id = auth.uid());
+
+-- ─── Staff Audit Logs ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS staff_audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  staff_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  staff_name TEXT,
+  action TEXT NOT NULL,
+  details JSONB DEFAULT '{}',
+  event_id UUID REFERENCES events(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE staff_audit_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "audit_select_admin" ON staff_audit_logs
+  FOR SELECT TO authenticated USING (get_my_role() = 'admin');
+
+CREATE POLICY "audit_insert_auth" ON staff_audit_logs
+  FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS audit_staff_id_idx ON staff_audit_logs (staff_id);
+CREATE INDEX IF NOT EXISTS audit_created_at_idx ON staff_audit_logs (created_at DESC);
+
+ALTER PUBLICATION supabase_realtime ADD TABLE staff_audit_logs;

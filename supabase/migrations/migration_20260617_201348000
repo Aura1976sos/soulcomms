@@ -1,0 +1,10 @@
+-- Add slug column to events for URL-friendly live pages
+ALTER TABLE events ADD COLUMN IF NOT EXISTS slug TEXT;
+
+-- Backfill existing events: slug from code (lowercase, non-alphanumeric → hyphens)
+UPDATE events
+SET slug = LOWER(REGEXP_REPLACE(REGEXP_REPLACE(code, '[^a-zA-Z0-9\s-]', '', 'g'), '\s+', '-', 'g'))
+WHERE slug IS NULL;
+
+-- Make slug unique and not null for future rows (existing rows already filled)
+ALTER TABLE events ADD CONSTRAINT events_slug_unique UNIQUE (slug);

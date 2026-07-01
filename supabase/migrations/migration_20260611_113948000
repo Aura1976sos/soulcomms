@@ -1,0 +1,59 @@
+
+-- ============================================================
+-- SOULCOMMS: Multi-Event Architecture
+-- ============================================================
+
+-- 1. Events table
+CREATE TABLE IF NOT EXISTS events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  code TEXT UNIQUE NOT NULL,
+  date DATE,
+  venue TEXT,
+  status TEXT DEFAULT 'active' CHECK (status IN ('draft','active','completed')),
+  banner_url TEXT,
+  created_by UUID REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+
+-- Anon + authenticated read
+CREATE POLICY "events_select_anon" ON events FOR SELECT TO anon USING (true);
+CREATE POLICY "events_select_auth" ON events FOR SELECT TO authenticated USING (true);
+CREATE POLICY "events_insert_admin" ON events FOR INSERT TO authenticated
+  WITH CHECK (get_my_role() = 'admin');
+CREATE POLICY "events_update_admin" ON events FOR UPDATE TO authenticated
+  USING (get_my_role() = 'admin');
+CREATE POLICY "events_delete_admin" ON events FOR DELETE TO authenticated
+  USING (get_my_role() = 'admin');
+
+-- 2. Add event_id FK to data tables
+ALTER TABLE participants      ADD COLUMN IF NOT EXISTS event_id UUID REFERENCES events(id);
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS event_id UUID REFERENCES events(id);
+ALTER TABLE crew_members       ADD COLUMN IF NOT EXISTS event_id UUID REFERENCES events(id);
+ALTER TABLE activity_logs      ADD COLUMN IF NOT EXISTS event_id UUID REFERENCES events(id);
+
+-- Indexes for fast event-scoped queries
+CREATE INDEX IF NOT EXISTS participants_event_id_idx ON participants(event_id);
+CREATE INDEX IF NOT EXISTS sp_event_id_idx ON service_providers(event_id);
+CREATE INDEX IF NOT EXISTS crew_event_id_idx ON crew_members(event_id);
+CREATE INDEX IF NOT EXISTS activity_logs_event_id_idx ON activity_logs(event_id);
+
+-- 3. Seed: The Gathering 100 - MTN as first event
+INSERT INTO events (name, code, date, venue, status)
+VALUES ('The Gathering 100 - MTN', 'TG100-MTN', '2026-06-10', 'Lagos', 'active')
+ON CONFLICT (code) DO NOTHING;
+
+-- 4. Backfill existing records to first event
+UPDATE participants      SET event_id = (SELECT id FROM events WHERE code='TG100-MTN') WHERE event_id IS NULL;
+UPDATE service_providers SET event_id = (SELECT id FROM events WHERE code='TG100-MTN') WHERE event_id IS NULL;
+UPDATE crew_members       SET event_id = (SELECT id FROM events WHERE code='TG100-MTN') WHERE event_id IS NULL;
+UPDATE activity_logs      SET event_id = (SELECT id FROM events WHERE code='TG100-MTN') WHERE event_id IS NULL;
+
+-- 5. Enable realtime for events
+DO $$ BEGIN
+  BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE events;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+END $$;

@@ -1,0 +1,119 @@
+
+-- ============================================================
+-- TG100 System Update: Public access + delete policies
+-- ============================================================
+
+-- 1. Anon SELECT policies for public tracker & display mode
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'participants' AND policyname = 'anon_participants_select'
+  ) THEN
+    CREATE POLICY "anon_participants_select" ON participants
+      FOR SELECT TO anon USING (true);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'activity_logs' AND policyname = 'anon_activity_logs_select'
+  ) THEN
+    CREATE POLICY "anon_activity_logs_select" ON activity_logs
+      FOR SELECT TO anon USING (true);
+  END IF;
+END $$;
+
+-- 2. service_providers and crew_members tables (create if not exist)
+CREATE TABLE IF NOT EXISTS service_providers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code TEXT UNIQUE NOT NULL,
+  brand_name TEXT NOT NULL,
+  contact_person TEXT,
+  phone TEXT,
+  is_checked_in BOOLEAN DEFAULT FALSE,
+  checked_in_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS crew_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  department TEXT,
+  phone TEXT,
+  is_checked_in BOOLEAN DEFAULT FALSE,
+  checked_in_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE service_providers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crew_members ENABLE ROW LEVEL SECURITY;
+
+-- 3. Authenticated policies for service_providers
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='service_providers' AND policyname='sp_select') THEN
+    CREATE POLICY "sp_select" ON service_providers FOR SELECT TO authenticated USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='service_providers' AND policyname='sp_insert') THEN
+    CREATE POLICY "sp_insert" ON service_providers FOR INSERT TO authenticated WITH CHECK (get_my_role() = 'admin');
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='service_providers' AND policyname='sp_update') THEN
+    CREATE POLICY "sp_update" ON service_providers FOR UPDATE TO authenticated USING (get_my_role() IN ('admin', 'checkin_officer'));
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='service_providers' AND policyname='sp_delete') THEN
+    CREATE POLICY "sp_delete" ON service_providers FOR DELETE TO authenticated USING (get_my_role() = 'admin');
+  END IF;
+END $$;
+
+-- 4. Authenticated policies for crew_members
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='crew_members' AND policyname='crew_select') THEN
+    CREATE POLICY "crew_select" ON crew_members FOR SELECT TO authenticated USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='crew_members' AND policyname='crew_insert') THEN
+    CREATE POLICY "crew_insert" ON crew_members FOR INSERT TO authenticated WITH CHECK (get_my_role() = 'admin');
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='crew_members' AND policyname='crew_update') THEN
+    CREATE POLICY "crew_update" ON crew_members FOR UPDATE TO authenticated USING (get_my_role() IN ('admin', 'checkin_officer'));
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='crew_members' AND policyname='crew_delete') THEN
+    CREATE POLICY "crew_delete" ON crew_members FOR DELETE TO authenticated USING (get_my_role() = 'admin');
+  END IF;
+END $$;
+
+-- 5. Anon SELECT for service_providers and crew_members
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='service_providers' AND policyname='anon_sp_select') THEN
+    CREATE POLICY "anon_sp_select" ON service_providers FOR SELECT TO anon USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='crew_members' AND policyname='anon_crew_select') THEN
+    CREATE POLICY "anon_crew_select" ON crew_members FOR SELECT TO anon USING (true);
+  END IF;
+END $$;
+
+-- 6. Enable realtime (safe if already added)
+DO $$ BEGIN
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE service_providers;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE crew_members;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+END $$;

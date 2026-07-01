@@ -1,0 +1,213 @@
+-- ══════════════════════════════════════════════════════════════════════════════
+-- STAFF COMMUNICATION SYSTEM
+-- ══════════════════════════════════════════════════════════════════════════════
+
+-- 1. Channels ─────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS comm_channels (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id      uuid REFERENCES events(id) ON DELETE CASCADE,
+  type          text NOT NULL DEFAULT 'group' CHECK (type IN ('dm','group')),
+  name          text,
+  slug          text,
+  allowed_roles text[],   -- NULL = all roles
+  created_by    uuid REFERENCES staff_profiles(id),
+  created_at    timestamptz DEFAULT now(),
+  UNIQUE (event_id, slug)
+);
+
+-- 2. Channel members ───────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS comm_channel_members (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  channel_id   uuid REFERENCES comm_channels(id) ON DELETE CASCADE,
+  staff_id     uuid REFERENCES staff_profiles(id) ON DELETE CASCADE,
+  last_read_at timestamptz DEFAULT now(),
+  joined_at    timestamptz DEFAULT now(),
+  UNIQUE (channel_id, staff_id)
+);
+
+-- 3. Messages ─────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS comm_messages (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  channel_id  uuid REFERENCES comm_channels(id) ON DELETE CASCADE,
+  sender_id   uuid REFERENCES staff_profiles(id),
+  sender_name text NOT NULL,
+  sender_role text NOT NULL DEFAULT 'staff',
+  content     text NOT NULL,
+  type        text DEFAULT 'text' CHECK (type IN ('text','file','system','broadcast','escalation')),
+  file_url    text,
+  file_name   text,
+  mentions    uuid[],   -- staff_ids mentioned
+  metadata    jsonb,    -- escalation: {participant_code, qr_value, error, page, officer}
+  created_at  timestamptz DEFAULT now(),
+  is_deleted  bool DEFAULT false
+);
+
+-- 4. Mention notifications ────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS comm_mentions (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  message_id         uuid REFERENCES comm_messages(id) ON DELETE CASCADE,
+  channel_id         uuid REFERENCES comm_channels(id) ON DELETE CASCADE,
+  sender_name        text,
+  channel_name       text,
+  mentioned_staff_id uuid REFERENCES staff_profiles(id) ON DELETE CASCADE,
+  seen_at            timestamptz,
+  created_at         timestamptz DEFAULT now()
+);
+
+-- Indexes ─────────────────────────────────────────────────────────────────────
+CREATE INDEX comm_messages_channel_idx    ON comm_messages (channel_id, created_at DESC);
+CREATE INDEX comm_messages_sender_idx     ON comm_messages (sender_id);
+CREATE INDEX comm_channel_members_staff_idx ON comm_channel_members (staff_id);
+CREATE INDEX comm_mentions_staff_idx      ON comm_mentions (mentioned_staff_id, seen_at);
+
+-- Realtime ────────────────────────────────────────────────────────────────────
+ALTER PUBLICATION supabase_realtime ADD TABLE comm_messages;
+ALTER PUBLICATION supabase_realtime ADD TABLE comm_mentions;
+ALTER PUBLICATION supabase_realtime ADD TABLE comm_channel_members;
+
+-- ── RLS ───────────────────────────────────────────────────────────────────────
+ALTER TABLE comm_channels        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comm_channel_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comm_messages        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comm_mentions        ENABLE ROW LEVEL SECURITY;
+
+-- comm_channels: members can read their own channels; authenticated can insert
+CREATE POLICY comm_channels_select ON comm_channels FOR SELECT TO authenticated
+  USING (
+    id IN (SELECT channel_id FROM comm_channel_members WHERE staff_id = auth.uid())
+    OR get_my_role() IN ('admin','event_admin')
+  );
+CREATE POLICY comm_channels_insert ON comm_channels FOR INSERT TO authenticated
+  WITH CHECK (true);
+
+-- comm_channel_members: members can see members of channels they belong to
+CREATE POLICY comm_channel_members_select ON comm_channel_members FOR SELECT TO authenticated
+  USING (
+    staff_id = auth.uid()
+    OR channel_id IN (SELECT channel_id FROM comm_channel_members WHERE staff_id = auth.uid())
+    OR get_my_role() IN ('admin','event_admin')
+  );
+CREATE POLICY comm_channel_members_insert ON comm_channel_members FOR INSERT TO authenticated
+  WITH CHECK (true);
+CREATE POLICY comm_channel_members_update ON comm_channel_members FOR UPDATE TO authenticated
+  USING (staff_id = auth.uid());
+
+-- comm_messages: channel members can read & send
+CREATE POLICY comm_messages_select ON comm_messages FOR SELECT TO authenticated
+  USING (
+    channel_id IN (SELECT channel_id FROM comm_channel_members WHERE staff_id = auth.uid())
+  );
+CREATE POLICY comm_messages_insert ON comm_messages FOR INSERT TO authenticated
+  WITH CHECK (
+    channel_id IN (SELECT channel_id FROM comm_channel_members WHERE staff_id = auth.uid())
+    AND sender_id = auth.uid()
+  );
+CREATE POLICY comm_messages_update ON comm_messages FOR UPDATE TO authenticated
+  USING (sender_id = auth.uid() OR get_my_role() IN ('admin','event_admin'));
+
+-- comm_mentions: only own mentions
+CREATE POLICY comm_mentions_select ON comm_mentions FOR SELECT TO authenticated
+  USING (mentioned_staff_id = auth.uid());
+CREATE POLICY comm_mentions_insert ON comm_mentions FOR INSERT TO authenticated
+  WITH CHECK (true);
+CREATE POLICY comm_mentions_update ON comm_mentions FOR UPDATE TO authenticated
+  USING (mentioned_staff_id = auth.uid());
+
+-- ── Storage bucket for file sharing ──────────────────────────────────────────
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'comm-files', 'comm-files', true,
+  10485760,  -- 10 MB
+  ARRAY['image/jpeg','image/png','image/gif','image/webp','application/pdf','text/plain']
+) ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "comm_files_read"   ON storage.objects FOR SELECT TO authenticated USING (bucket_id = 'comm-files');
+CREATE POLICY "comm_files_insert" ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'comm-files');
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- RPC: ensure_event_channels — auto-create the 4 standard group channels
+-- ══════════════════════════════════════════════════════════════════════════════
+CREATE OR REPLACE FUNCTION ensure_event_channels(p_event_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_channel_id uuid;
+  v_role       text;
+  v_staff_id   uuid := auth.uid();
+BEGIN
+  -- Get caller's role
+  SELECT role INTO v_role FROM staff_profiles WHERE id = v_staff_id;
+
+  -- 1. Event Operations (all roles)
+  INSERT INTO comm_channels (event_id, type, name, slug, allowed_roles)
+  VALUES (p_event_id, 'group', 'Event Operations', 'event_ops', NULL)
+  ON CONFLICT (event_id, slug) DO NOTHING;
+
+  -- 2. Check-In Team
+  INSERT INTO comm_channels (event_id, type, name, slug, allowed_roles)
+  VALUES (p_event_id, 'group', 'Check-In Team', 'checkin_team', ARRAY['admin','event_admin','checkin_officer'])
+  ON CONFLICT (event_id, slug) DO NOTHING;
+
+  -- 3. Activity Team
+  INSERT INTO comm_channels (event_id, type, name, slug, allowed_roles)
+  VALUES (p_event_id, 'group', 'Activity Team', 'activity_team', ARRAY['admin','event_admin','activity_coordinator'])
+  ON CONFLICT (event_id, slug) DO NOTHING;
+
+  -- 4. Leadership
+  INSERT INTO comm_channels (event_id, type, name, slug, allowed_roles)
+  VALUES (p_event_id, 'group', 'Leadership', 'leadership', ARRAY['admin','event_admin'])
+  ON CONFLICT (event_id, slug) DO NOTHING;
+
+  -- Add caller to channels they're eligible for
+  FOR v_channel_id IN
+    SELECT id FROM comm_channels
+    WHERE event_id = p_event_id
+      AND (allowed_roles IS NULL OR v_role = ANY(allowed_roles))
+  LOOP
+    INSERT INTO comm_channel_members (channel_id, staff_id)
+    VALUES (v_channel_id, v_staff_id)
+    ON CONFLICT (channel_id, staff_id) DO NOTHING;
+  END LOOP;
+END;
+$$;
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- RPC: get_or_create_dm — find or create a DM channel between two staff
+-- ══════════════════════════════════════════════════════════════════════════════
+CREATE OR REPLACE FUNCTION get_or_create_dm(p_other_staff_id uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_my_id     uuid := auth.uid();
+  v_channel_id uuid;
+BEGIN
+  -- Look for existing DM between these two users
+  SELECT c.id INTO v_channel_id
+  FROM comm_channels c
+  JOIN comm_channel_members m1 ON m1.channel_id = c.id AND m1.staff_id = v_my_id
+  JOIN comm_channel_members m2 ON m2.channel_id = c.id AND m2.staff_id = p_other_staff_id
+  WHERE c.type = 'dm'
+  LIMIT 1;
+
+  IF v_channel_id IS NOT NULL THEN
+    RETURN v_channel_id;
+  END IF;
+
+  -- Create new DM channel
+  INSERT INTO comm_channels (type, event_id, created_by)
+  SELECT 'dm', NULL, v_my_id
+  RETURNING id INTO v_channel_id;
+
+  -- Add both members
+  INSERT INTO comm_channel_members (channel_id, staff_id) VALUES (v_channel_id, v_my_id);
+  INSERT INTO comm_channel_members (channel_id, staff_id) VALUES (v_channel_id, p_other_staff_id);
+
+  RETURN v_channel_id;
+END;
+$$;

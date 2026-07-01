@@ -1,0 +1,19 @@
+
+-- Remove demo participants (codes 0001 through 0020)
+DELETE FROM participants WHERE code ~ '^(000[1-9]|001[0-9]|0020)$';
+
+-- Also remove any activity logs for those participants (orphan cleanup)
+DELETE FROM activity_logs WHERE participant_code ~ '^(000[1-9]|001[0-9]|0020)$';
+
+-- Add qr_link to service_providers for future QR generation
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS qr_link TEXT;
+CREATE INDEX IF NOT EXISTS sp_qr_link_idx ON service_providers (qr_link);
+
+-- Add qr_link to crew_members for future QR generation
+ALTER TABLE crew_members ADD COLUMN IF NOT EXISTS qr_link TEXT;
+CREATE INDEX IF NOT EXISTS crew_qr_link_idx ON crew_members (qr_link);
+
+-- Add check_in_method column to track manual vs QR scan
+ALTER TABLE participants     ADD COLUMN IF NOT EXISTS check_in_method TEXT;
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS check_in_method TEXT;
+ALTER TABLE crew_members      ADD COLUMN IF NOT EXISTS check_in_method TEXT;

@@ -1,0 +1,69 @@
+-- Create activities table
+CREATE TABLE IF NOT EXISTS activities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  parent_id UUID REFERENCES activities(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  code TEXT NOT NULL,
+  description TEXT,
+  category TEXT,
+  points_value INTEGER DEFAULT 10,
+  status TEXT DEFAULT 'active' CHECK (status IN ('active','inactive','archived')),
+  icon_name TEXT DEFAULT 'Zap',
+  color TEXT DEFAULT 'hsl(0 85% 52%)',
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_by UUID REFERENCES auth.users(id),
+  UNIQUE (event_id, code)
+);
+
+-- RLS
+ALTER TABLE activities ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "activities_select_anon" ON activities FOR SELECT USING (true);
+CREATE POLICY "activities_select_auth" ON activities FOR SELECT TO authenticated USING (true);
+CREATE POLICY "activities_insert_admin" ON activities FOR INSERT TO authenticated WITH CHECK (get_my_role() = 'admin');
+CREATE POLICY "activities_update_admin" ON activities FOR UPDATE TO authenticated USING (get_my_role() = 'admin');
+CREATE POLICY "activities_delete_admin" ON activities FOR DELETE TO authenticated USING (get_my_role() = 'admin');
+
+-- Realtime
+ALTER PUBLICATION supabase_realtime ADD TABLE activities;
+
+-- Add activity_id FK to activity_logs
+ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS activity_id UUID REFERENCES activities(id);
+
+-- Seed activities for TG100-MTN event (match existing hardcoded EXPERIENCES)
+DO $$
+DECLARE
+  v_event_id UUID;
+BEGIN
+  SELECT id INTO v_event_id FROM events WHERE code = 'TG100-MTN' LIMIT 1;
+  IF v_event_id IS NOT NULL THEN
+    INSERT INTO activities (event_id, name, code, category, points_value, icon_name, color, sort_order)
+    VALUES
+      (v_event_id, 'Club 100',          'club100',          'Entertainment', 10, 'Music',               'hsl(320 100% 65%)', 1),
+      (v_event_id, 'Sip & Paint',       'sip_and_paint',    'Arts',          10, 'Palette',             'hsl(25 100% 55%)',  2),
+      (v_event_id, 'Podcast',           'podcast',          'Media',         10, 'Mic',                 'hsl(200 100% 55%)', 3),
+      (v_event_id, 'Fashion Runway',    'fashion_runway',   'Fashion',       10, 'Shirt',               'hsl(340 90% 60%)',  4),
+      (v_event_id, 'Craft to Cash',     'craft_to_cash',    'Business',      10, 'Hammer',              'hsl(30 95% 55%)',   5),
+      (v_event_id, 'Creators Circle',   'creators_circle',  'Media',         10, 'Star',                'hsl(150 80% 45%)', 6),
+      (v_event_id, 'Beauty Hub',        'beauty_hub',       'Beauty',        10, 'Sparkles',            'hsl(300 90% 65%)', 7),
+      (v_event_id, 'Confession Booth',  'confession_booth', 'Social',        10, 'MessageSquareHeart',  'hsl(350 90% 60%)', 8),
+      (v_event_id, 'Game Arcade',       'game_arcade',      'Gaming',        10, 'Joystick',            'hsl(180 100% 45%)',9),
+      (v_event_id, 'Movie Lounge',      'movie_lounge',     'Entertainment', 10, 'Film',                'hsl(210 100% 60%)',10),
+      (v_event_id, 'Pitchathon',        'pitchathon',       'Business',      10, 'Zap',                 'hsl(47 100% 50%)', 11),
+      (v_event_id, 'Market 100',        'market_100',       'Commerce',      10, 'ShoppingBag',         'hsl(60 90% 50%)',  12),
+      (v_event_id, 'Esport – VR',       'esport_vr',        'E-Sport',       10, 'Headset',             'hsl(280 100% 65%)',13),
+      (v_event_id, 'Esport – Dancing',  'esport_dancing',   'E-Sport',       10, 'Music2',              'hsl(265 100% 65%)',14),
+      (v_event_id, 'Esport – Console',  'esport_console',   'E-Sport',       10, 'Gamepad2',            'hsl(250 100% 70%)',15)
+    ON CONFLICT (event_id, code) DO NOTHING;
+  END IF;
+END $$;
+
+-- Backfill activity_id on activity_logs
+UPDATE activity_logs al
+SET activity_id = a.id
+FROM activities a
+WHERE a.event_id = al.event_id
+  AND a.code = al.experience
+  AND al.activity_id IS NULL;

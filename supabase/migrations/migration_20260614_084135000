@@ -1,0 +1,167 @@
+-- ──────────────────────────────────────────────────────────────────────────────
+-- checkin_history: audit trail for individual and bulk check-in reversals
+-- ──────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS checkin_history (
+  id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id                uuid REFERENCES events(id) ON DELETE CASCADE,
+  record_type             text NOT NULL,
+  record_id               uuid NOT NULL,
+  record_name             text NOT NULL,
+  record_code             text NOT NULL,
+  original_checked_in_at  timestamptz,
+  original_check_in_method text,
+  unchecked_by            uuid REFERENCES staff_profiles(id),
+  unchecked_by_name       text,
+  unchecked_at            timestamptz DEFAULT now(),
+  reason                  text,
+  reset_batch_id          uuid,
+  CONSTRAINT checkin_history_record_type_check
+    CHECK (record_type IN ('participant', 'crew', 'service_provider'))
+);
+
+ALTER TABLE checkin_history ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY ch_select ON checkin_history
+  FOR SELECT TO authenticated
+  USING (get_my_role() IN ('admin', 'event_admin'));
+
+CREATE POLICY ch_insert ON checkin_history
+  FOR INSERT TO authenticated
+  WITH CHECK (get_my_role() IN ('admin', 'event_admin'));
+
+-- Index for fast lookup by record
+CREATE INDEX checkin_history_record_idx ON checkin_history (record_id, unchecked_at DESC);
+CREATE INDEX checkin_history_event_idx  ON checkin_history (event_id, unchecked_at DESC);
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- reset_event_attendance: atomic bulk reset called via supabase.rpc()
+-- ──────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION reset_event_attendance(
+  p_event_id           uuid,
+  p_reset_participants boolean DEFAULT true,
+  p_reset_crew         boolean DEFAULT true,
+  p_reset_sps          boolean DEFAULT true,
+  p_reset_activity_logs boolean DEFAULT true,
+  p_reason             text    DEFAULT 'Testing Reset',
+  p_staff_id           uuid    DEFAULT NULL,
+  p_staff_name         text    DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_batch_id        uuid := gen_random_uuid();
+  v_participant_count int := 0;
+  v_crew_count       int := 0;
+  v_sp_count         int := 0;
+  v_activity_count   int := 0;
+BEGIN
+  -- Permission check
+  IF get_my_role() NOT IN ('admin', 'event_admin') THEN
+    RAISE EXCEPTION 'Permission denied: only admin or event_admin can reset attendance';
+  END IF;
+
+  -- ── Participants ─────────────────────────────────────────────────────────
+  IF p_reset_participants THEN
+    INSERT INTO checkin_history (
+      event_id, record_type, record_id, record_name, record_code,
+      original_checked_in_at, original_check_in_method,
+      unchecked_by, unchecked_by_name, reason, reset_batch_id
+    )
+    SELECT
+      p_event_id, 'participant', id, name, code,
+      checked_in_at, check_in_method,
+      p_staff_id, p_staff_name, p_reason, v_batch_id
+    FROM participants
+    WHERE event_id = p_event_id AND is_checked_in = true;
+
+    GET DIAGNOSTICS v_participant_count = ROW_COUNT;
+
+    UPDATE participants
+    SET is_checked_in   = false,
+        checked_in_at   = NULL,
+        check_in_method = NULL,
+        total_points    = 0
+    WHERE event_id = p_event_id;
+  END IF;
+
+  -- ── Crew ─────────────────────────────────────────────────────────────────
+  IF p_reset_crew THEN
+    INSERT INTO checkin_history (
+      event_id, record_type, record_id, record_name, record_code,
+      original_checked_in_at, original_check_in_method,
+      unchecked_by, unchecked_by_name, reason, reset_batch_id
+    )
+    SELECT
+      p_event_id, 'crew', id, name, code,
+      checked_in_at, check_in_method,
+      p_staff_id, p_staff_name, p_reason, v_batch_id
+    FROM crew_members
+    WHERE event_id = p_event_id AND is_checked_in = true;
+
+    GET DIAGNOSTICS v_crew_count = ROW_COUNT;
+
+    UPDATE crew_members
+    SET is_checked_in   = false,
+        checked_in_at   = NULL,
+        check_in_method = NULL
+    WHERE event_id = p_event_id;
+  END IF;
+
+  -- ── Service Providers ────────────────────────────────────────────────────
+  IF p_reset_sps THEN
+    INSERT INTO checkin_history (
+      event_id, record_type, record_id, record_name, record_code,
+      original_checked_in_at, original_check_in_method,
+      unchecked_by, unchecked_by_name, reason, reset_batch_id
+    )
+    SELECT
+      p_event_id, 'service_provider', id, brand_name, code,
+      checked_in_at, check_in_method,
+      p_staff_id, p_staff_name, p_reason, v_batch_id
+    FROM service_providers
+    WHERE event_id = p_event_id AND is_checked_in = true;
+
+    GET DIAGNOSTICS v_sp_count = ROW_COUNT;
+
+    UPDATE service_providers
+    SET is_checked_in   = false,
+        checked_in_at   = NULL,
+        check_in_method = NULL
+    WHERE event_id = p_event_id;
+  END IF;
+
+  -- ── Activity Logs ─────────────────────────────────────────────────────────
+  IF p_reset_activity_logs THEN
+    SELECT COUNT(*) INTO v_activity_count FROM activity_logs WHERE event_id = p_event_id;
+    DELETE FROM activity_logs WHERE event_id = p_event_id;
+  END IF;
+
+  -- ── Audit log ─────────────────────────────────────────────────────────────
+  INSERT INTO staff_audit_logs (staff_id, staff_name, action, event_id, details)
+  VALUES (
+    p_staff_id,
+    p_staff_name,
+    'reset_attendance',
+    p_event_id,
+    jsonb_build_object(
+      'batch_id',              v_batch_id,
+      'participants_reset',    v_participant_count,
+      'crew_reset',            v_crew_count,
+      'sps_reset',             v_sp_count,
+      'activity_logs_deleted', v_activity_count,
+      'reason',                p_reason
+    )
+  );
+
+  RETURN jsonb_build_object(
+    'batch_id',          v_batch_id,
+    'participants',      v_participant_count,
+    'crew',              v_crew_count,
+    'service_providers', v_sp_count,
+    'activity_logs',     v_activity_count
+  );
+END;
+$$;

@@ -1,0 +1,71 @@
+{
+  "name": "Soulcomms",
+  "short_name": "Soulcomms",
+  "description": "Soulcomms — Multi-event management platform",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#e81c1c",
+  "background_color": "#ffffff",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "16x16",
+      "type": "image/png"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "48x48",
+      "type": "image/png"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "72x72",
+      "type": "image/png"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "96x96",
+      "type": "image/png"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "384x384",
+      "type": "image/png"
+    },
+    {
+      "src": "https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

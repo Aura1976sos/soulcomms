@@ -1,0 +1,9 @@
+
+-- Add QR link column to participants
+ALTER TABLE participants ADD COLUMN IF NOT EXISTS qr_link TEXT;
+
+-- Index for fast QR lookup
+CREATE INDEX IF NOT EXISTS participants_qr_link_idx ON participants (qr_link);
+
+-- Anon policy already exists for participants from previous migration
+-- Make phone nullable (it already is, confirmed from schema query)

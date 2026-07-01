@@ -1,0 +1,41 @@
+
+-- get_dashboard_stats: server-side aggregation replacing 4 client-side full-table scans
+CREATE OR REPLACE FUNCTION get_dashboard_stats(p_event_id uuid)
+RETURNS json
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+  SELECT json_build_object(
+    'log_counts', (
+      SELECT coalesce(json_object_agg(activity_id, cnt), '{}')
+      FROM (
+        SELECT activity_id, count(*)::int AS cnt
+        FROM activity_logs
+        WHERE event_id = p_event_id
+          AND activity_id IS NOT NULL
+        GROUP BY activity_id
+      ) t
+    ),
+    'session_counts', (
+      SELECT coalesce(json_object_agg(activity_id, cnt), '{}')
+      FROM (
+        SELECT activity_id, count(*)::int AS cnt
+        FROM session_participations
+        WHERE event_id = p_event_id
+          AND activity_id IS NOT NULL
+        GROUP BY activity_id
+      ) t
+    ),
+    'unique_participants', (
+      SELECT count(DISTINCT participant_id)::int
+      FROM (
+        SELECT participant_id FROM activity_logs
+        WHERE event_id = p_event_id AND participant_id IS NOT NULL
+        UNION
+        SELECT participant_id FROM session_participations
+        WHERE event_id = p_event_id AND participant_id IS NOT NULL
+      ) u
+    )
+  )
+$$;

@@ -1,0 +1,86 @@
+
+-- ============================================================
+-- FIX: Replace recursive RLS policies with SECURITY DEFINER
+-- The old policies caused infinite recursion:
+--   participants UPDATE → checks staff_profiles RLS
+--   staff_profiles RLS → checks staff_profiles again → ∞ loop
+-- ============================================================
+
+-- Step 1: Create a SECURITY DEFINER function to safely get role
+-- This bypasses RLS entirely so there's no recursive loop
+CREATE OR REPLACE FUNCTION get_my_role()
+RETURNS TEXT
+LANGUAGE SQL
+SECURITY DEFINER
+STABLE
+AS $$
+  SELECT role FROM staff_profiles WHERE id = auth.uid() LIMIT 1;
+$$;
+
+-- Step 2: Drop all old policies on participants and staff_profiles
+DROP POLICY IF EXISTS "Authenticated users can read participants" ON participants;
+DROP POLICY IF EXISTS "Admins can insert participants" ON participants;
+DROP POLICY IF EXISTS "Admins and checkin officers can update participants" ON participants;
+DROP POLICY IF EXISTS "Admins can delete participants" ON participants;
+
+DROP POLICY IF EXISTS "Users can read own profile" ON staff_profiles;
+DROP POLICY IF EXISTS "Admins can insert staff profiles" ON staff_profiles;
+DROP POLICY IF EXISTS "Admins can update staff profiles" ON staff_profiles;
+
+-- Step 3: Recreate participants policies using get_my_role()
+-- No recursion possible since get_my_role() skips RLS
+CREATE POLICY "participants_select"
+  ON participants FOR SELECT
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "participants_insert"
+  ON participants FOR INSERT
+  TO authenticated
+  WITH CHECK (get_my_role() = 'admin');
+
+CREATE POLICY "participants_update"
+  ON participants FOR UPDATE
+  TO authenticated
+  USING (get_my_role() IN ('admin', 'checkin_officer'));
+
+CREATE POLICY "participants_delete"
+  ON participants FOR DELETE
+  TO authenticated
+  USING (get_my_role() = 'admin');
+
+-- Step 4: Recreate staff_profiles policies (no self-reference)
+CREATE POLICY "staff_select_own"
+  ON staff_profiles FOR SELECT
+  TO authenticated
+  USING (id = auth.uid() OR get_my_role() = 'admin');
+
+CREATE POLICY "staff_insert"
+  ON staff_profiles FOR INSERT
+  TO authenticated
+  WITH CHECK (get_my_role() = 'admin');
+
+CREATE POLICY "staff_update"
+  ON staff_profiles FOR UPDATE
+  TO authenticated
+  USING (get_my_role() = 'admin');
+
+-- Step 5: Also fix activity_logs policies (same pattern)
+DROP POLICY IF EXISTS "Authenticated users can read activity logs" ON activity_logs;
+DROP POLICY IF EXISTS "Authenticated users can insert activity logs" ON activity_logs;
+DROP POLICY IF EXISTS "Admins can delete activity logs" ON activity_logs;
+
+CREATE POLICY "activity_logs_select"
+  ON activity_logs FOR SELECT
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "activity_logs_insert"
+  ON activity_logs FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "activity_logs_delete"
+  ON activity_logs FOR DELETE
+  TO authenticated
+  USING (get_my_role() = 'admin');

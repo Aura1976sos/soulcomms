@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+
+  <!-- Favicon (all sizes via CDN) -->
+  <link rel="icon" type="image/png" sizes="32x32"
+    href="https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png">
+  <link rel="icon" type="image/png" sizes="16x16"
+    href="https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png">
+  <link rel="shortcut icon" type="image/png"
+    href="https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png">
+
+  <!-- Apple Touch Icons (iOS / iPadOS home screen) -->
+  <link rel="apple-touch-icon" sizes="180x180"
+    href="https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png">
+  <link rel="apple-touch-icon" sizes="152x152"
+    href="https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png">
+  <link rel="apple-touch-icon" sizes="120x120"
+    href="https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png">
+
+  <!-- PWA -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e81c1c" />
+  <meta name="msapplication-TileColor" content="#e81c1c" />
+  <meta name="msapplication-TileImage"
+    content="https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+
+  <!-- iOS PWA meta -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Soulcomms" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+  <title>Soulcomms</title>
+  <meta name="description" content="Soulcomms — Multi-event management platform" />
+  <meta name="author" content="Soulcomms" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Soulcomms" />
+  <meta property="og:description" content="Soulcomms — Multi-event management platform" />
+  <meta property="og:image"
+    content="https://grazia-prod.oss-ap-southeast-1.aliyuncs.com/resources/uid_100066245/5775165d-fc5b-4f.png" />
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <!--
+    CACHE-BUSTING SCRIPT — runs before React, plain JS only.
+    Purpose: auto-reload when a new service worker takes control, AND clear
+    stale caches when we detect a version mismatch. Both mechanisms ensure
+    users always get fresh JS assets after a deploy, even if React crashed.
+  -->
+  <script>
+    (function () {
+      // 1. Auto-reload when the active service worker is replaced.
+      //    This works even if React never mounts (e.g. scheduler crash).
+      if ('serviceWorker' in navigator) {
+        // Capture whether a SW already controls this page BEFORE listening.
+        // On first install there is no controller, so controllerchange fires
+        // for the initial claim — we must NOT reload in that case.
+        var hadController = !!navigator.serviceWorker.controller;
+        navigator.serviceWorker.addEventListener('controllerchange', function () {
+          if (!hadController) return; // first install, not a real update
+          var KEY = 'sc_sw_r';
+          if (!sessionStorage.getItem(KEY)) {
+            sessionStorage.setItem(KEY, '1');
+            location.reload();
+          } else {
+            sessionStorage.removeItem(KEY);
+          }
+        });
+      }
+
+      // 2. Version-based forced cache clear.
+      //    Bump V whenever a breaking JS change is deployed.
+      var V = '4', K = 'sc_app_v';
+      var prev = localStorage.getItem(K);
+      if (prev !== V) {
+        localStorage.setItem(K, V);
+        if (prev !== null) {
+          // Previous version existed → clear SW + caches then reload
+          try {
+            var done = function () { location.reload(); };
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations()
+                .then(function (regs) {
+                  return Promise.all(regs.map(function (r) { return r.unregister(); }));
+                })
+                .then(function () {
+                  if (!('caches' in window)) return;
+                  return caches.keys().then(function (keys) {
+                    return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+                  });
+                })
+                .then(done)
+                .catch(done);
+            } else {
+              done();
+            }
+          } catch (e) { location.reload(); }
+        }
+      }
+    })();
+  </script>
+
+  <!-- IMPORTANT: DO NOT REMOVE THIS SCRIPT TAG OR THIS VERY COMMENT! -->
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

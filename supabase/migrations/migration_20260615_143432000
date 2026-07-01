@@ -1,0 +1,10 @@
+-- Add manual_count column to activities
+ALTER TABLE activities ADD COLUMN IF NOT EXISTS manual_count INTEGER;
+
+-- Set manual counts for specified activities
+UPDATE activities SET manual_count = 1050 WHERE id = 'c719928a-47cd-4935-beb8-b803053fe5fe';
+UPDATE activities SET manual_count = 582  WHERE id = '7554cc12-8585-4278-a6a0-a7190635ad6e';
+UPDATE activities SET manual_count = 246  WHERE id = '8384e58d-1697-4950-ba2e-cf8f4bd1d8a5';
+UPDATE activities SET manual_count = 147  WHERE id = 'a4462914-0ead-4e85-be57-9b9158da0f39';
+UPDATE activities SET manual_count = 98   WHERE id = '7fe183f1-9582-4457-8cac-0e9b0ca8f8d8';
+UPDATE activities SET manual_count = 38   WHERE id = '7c9fb816-b543-4d8e-9716-90f831d77a9f';

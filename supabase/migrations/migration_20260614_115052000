@@ -1,0 +1,210 @@
+-- ══════════════════════════════════════════════════════════════════════════════
+-- FIX: Infinite recursion in comm_channel_members RLS policies
+-- Root cause: SELECT policy on comm_channel_members queries comm_channel_members
+-- itself, causing infinite recursion during policy evaluation.
+-- Solution: Replace self-referencing subqueries with SECURITY DEFINER functions
+-- that bypass RLS entirely.
+-- ══════════════════════════════════════════════════════════════════════════════
+
+-- 1. Create a SECURITY DEFINER helper that checks channel membership
+--    without triggering any RLS policy (runs as postgres, bypasses RLS)
+CREATE OR REPLACE FUNCTION is_comm_channel_member(p_channel_id uuid)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM comm_channel_members
+    WHERE channel_id = p_channel_id
+      AND staff_id   = auth.uid()
+  );
+$$;
+
+-- ── comm_channel_members ──────────────────────────────────────────────────────
+-- Drop ALL existing policies first
+DROP POLICY IF EXISTS comm_channel_members_select ON comm_channel_members;
+DROP POLICY IF EXISTS comm_channel_members_insert ON comm_channel_members;
+DROP POLICY IF EXISTS comm_channel_members_update ON comm_channel_members;
+
+-- SELECT: only see your own memberships OR admin/event_admin can see all
+-- ⚠ NO self-referencing subquery here — that was the recursion culprit
+CREATE POLICY comm_channel_members_select ON comm_channel_members
+  FOR SELECT TO authenticated
+  USING (
+    staff_id = auth.uid()
+    OR get_my_role() IN ('admin', 'event_admin')
+  );
+
+-- INSERT: any authenticated user can be added (creator adds self + others)
+CREATE POLICY comm_channel_members_insert ON comm_channel_members
+  FOR INSERT TO authenticated
+  WITH CHECK (true);
+
+-- UPDATE: update your own last_read_at
+CREATE POLICY comm_channel_members_update ON comm_channel_members
+  FOR UPDATE TO authenticated
+  USING (staff_id = auth.uid());
+
+-- DELETE: admin/event_admin or channel creator (handled at app level)
+DROP POLICY IF EXISTS comm_channel_members_delete ON comm_channel_members;
+CREATE POLICY comm_channel_members_delete ON comm_channel_members
+  FOR DELETE TO authenticated
+  USING (
+    get_my_role() IN ('admin', 'event_admin')
+    OR staff_id = auth.uid()
+  );
+
+-- ── comm_channels ─────────────────────────────────────────────────────────────
+DROP POLICY IF EXISTS comm_channels_select ON comm_channels;
+DROP POLICY IF EXISTS comm_channels_insert ON comm_channels;
+DROP POLICY IF EXISTS comm_channels_update ON comm_channels;
+DROP POLICY IF EXISTS comm_channels_delete ON comm_channels;
+
+-- SELECT: use SECURITY DEFINER function — no recursion
+CREATE POLICY comm_channels_select ON comm_channels
+  FOR SELECT TO authenticated
+  USING (
+    is_comm_channel_member(id)
+    OR get_my_role() IN ('admin', 'event_admin')
+  );
+
+CREATE POLICY comm_channels_insert ON comm_channels
+  FOR INSERT TO authenticated
+  WITH CHECK (true);
+
+CREATE POLICY comm_channels_update ON comm_channels
+  FOR UPDATE TO authenticated
+  USING (
+    created_by = auth.uid()
+    OR get_my_role() IN ('admin', 'event_admin')
+  );
+
+CREATE POLICY comm_channels_delete ON comm_channels
+  FOR DELETE TO authenticated
+  USING (
+    created_by = auth.uid()
+    OR get_my_role() IN ('admin', 'event_admin')
+  );
+
+-- ── comm_messages ─────────────────────────────────────────────────────────────
+DROP POLICY IF EXISTS comm_messages_select ON comm_messages;
+DROP POLICY IF EXISTS comm_messages_insert ON comm_messages;
+DROP POLICY IF EXISTS comm_messages_update ON comm_messages;
+
+-- SELECT/INSERT: use SECURITY DEFINER function — no recursion
+CREATE POLICY comm_messages_select ON comm_messages
+  FOR SELECT TO authenticated
+  USING ( is_comm_channel_member(channel_id) );
+
+CREATE POLICY comm_messages_insert ON comm_messages
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    is_comm_channel_member(channel_id)
+    AND sender_id = auth.uid()
+  );
+
+CREATE POLICY comm_messages_update ON comm_messages
+  FOR UPDATE TO authenticated
+  USING (
+    sender_id = auth.uid()
+    OR get_my_role() IN ('admin', 'event_admin')
+  );
+
+-- ── comm_mentions ─────────────────────────────────────────────────────────────
+DROP POLICY IF EXISTS comm_mentions_select ON comm_mentions;
+DROP POLICY IF EXISTS comm_mentions_insert ON comm_mentions;
+DROP POLICY IF EXISTS comm_mentions_update ON comm_mentions;
+
+CREATE POLICY comm_mentions_select ON comm_mentions
+  FOR SELECT TO authenticated
+  USING (mentioned_staff_id = auth.uid());
+
+CREATE POLICY comm_mentions_insert ON comm_mentions
+  FOR INSERT TO authenticated
+  WITH CHECK (true);
+
+CREATE POLICY comm_mentions_update ON comm_mentions
+  FOR UPDATE TO authenticated
+  USING (mentioned_staff_id = auth.uid());
+
+-- ── Also fix ensure_event_channels to handle duplicate channels gracefully ────
+CREATE OR REPLACE FUNCTION ensure_event_channels(p_event_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_channel_id uuid;
+  v_role       text;
+  v_staff_id   uuid := auth.uid();
+BEGIN
+  SELECT role INTO v_role FROM staff_profiles WHERE id = v_staff_id;
+
+  INSERT INTO comm_channels (event_id, type, name, slug, allowed_roles)
+  VALUES (p_event_id, 'group', 'Event Operations', 'event_ops', NULL)
+  ON CONFLICT (event_id, slug) DO NOTHING;
+
+  INSERT INTO comm_channels (event_id, type, name, slug, allowed_roles)
+  VALUES (p_event_id, 'group', 'Check-In Team', 'checkin_team', ARRAY['admin','event_admin','checkin_officer'])
+  ON CONFLICT (event_id, slug) DO NOTHING;
+
+  INSERT INTO comm_channels (event_id, type, name, slug, allowed_roles)
+  VALUES (p_event_id, 'group', 'Activity Team', 'activity_team', ARRAY['admin','event_admin','activity_coordinator'])
+  ON CONFLICT (event_id, slug) DO NOTHING;
+
+  INSERT INTO comm_channels (event_id, type, name, slug, allowed_roles)
+  VALUES (p_event_id, 'group', 'Leadership', 'leadership', ARRAY['admin','event_admin'])
+  ON CONFLICT (event_id, slug) DO NOTHING;
+
+  -- Add staff to channels they're eligible for
+  FOR v_channel_id IN
+    SELECT id FROM comm_channels
+    WHERE event_id = p_event_id
+      AND (allowed_roles IS NULL OR v_role = ANY(allowed_roles))
+      AND (is_archived IS NULL OR is_archived = false)
+  LOOP
+    INSERT INTO comm_channel_members (channel_id, staff_id)
+    VALUES (v_channel_id, v_staff_id)
+    ON CONFLICT (channel_id, staff_id) DO NOTHING;
+  END LOOP;
+END;
+$$;
+
+-- ── Also fix get_or_create_dm ─────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION get_or_create_dm(p_other_staff_id uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_my_id      uuid := auth.uid();
+  v_channel_id uuid;
+BEGIN
+  -- Find existing DM between the two users
+  SELECT c.id INTO v_channel_id
+  FROM comm_channels c
+  JOIN comm_channel_members m1 ON m1.channel_id = c.id AND m1.staff_id = v_my_id
+  JOIN comm_channel_members m2 ON m2.channel_id = c.id AND m2.staff_id = p_other_staff_id
+  WHERE c.type = 'dm'
+  LIMIT 1;
+
+  IF v_channel_id IS NOT NULL THEN
+    RETURN v_channel_id;
+  END IF;
+
+  -- Create new DM channel (no event_id for DMs)
+  INSERT INTO comm_channels (type, created_by)
+  VALUES ('dm', v_my_id)
+  RETURNING id INTO v_channel_id;
+
+  -- Add both members
+  INSERT INTO comm_channel_members (channel_id, staff_id) VALUES (v_channel_id, v_my_id);
+  INSERT INTO comm_channel_members (channel_id, staff_id) VALUES (v_channel_id, p_other_staff_id);
+
+  RETURN v_channel_id;
+END;
+$$;
