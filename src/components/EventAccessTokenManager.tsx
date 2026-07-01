@@ -92,6 +92,21 @@ export function EventAccessTokenManager({ eventId, eventName }: EventAccessToken
             toast({
                 title: 'Error',
                 description: error instanceof Error ? error.message : 'Failed to create access token',
+                variant: 'destructive',
+            });
+        } finally {
+            setCreating(false);
+        }
+    };
+
+    const handleRevokeToken = async (token: string) => {
+        try {
+            const success = await revokeEventAccessToken(token);
+            if (success) {
+                toast({
+                    title: 'Success',
+                    description: 'Token revoked successfully',
+                });
                 await loadTokens();
             } else {
                 toast({
