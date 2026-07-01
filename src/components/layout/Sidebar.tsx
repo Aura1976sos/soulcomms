@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, ScanLine, Zap, Users, Trophy, Upload, LogOut, X, UserCog,
   Briefcase, HardHat, Radio, Monitor, ExternalLink, CalendarDays, ChevronDown,
-  ListChecks, MessageSquare, HeartPulse,
+  ListChecks, MessageSquare, HeartPulse, BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
@@ -40,6 +40,7 @@ const navGroups = [
     items: [
       { to: "/events", icon: CalendarDays, label: "Events", roles: ["admin"] },
       { to: "/activities", icon: ListChecks, label: "Activities", roles: ["admin"] },
+      { to: "/analytics", icon: BarChart3, label: "Time Analytics", roles: ["admin"] },
       { to: "/import", icon: Upload, label: "Import Participants", roles: ["admin"] },
       { to: "/import-providers", icon: Upload, label: "Import Providers", roles: ["admin"] },
       { to: "/import-crew", icon: Upload, label: "Import Crew", roles: ["admin"] },

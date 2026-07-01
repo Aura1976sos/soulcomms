@@ -27,6 +27,7 @@ const StaffManagement   = lazy(() => import("./pages/StaffManagement"));
 const Events            = lazy(() => import("./pages/Events"));
 const Communications    = lazy(() => import("./pages/Communications"));
 const SystemHealth      = lazy(() => import("./pages/SystemHealth"));
+const ActivityTimeAnalytics = lazy(() => import("./pages/ActivityTimeAnalytics"));
 
 // ── Suspense wrapper helper ────────────────────────────────────────────────────
 function Lazy({ children }: { children: React.ReactNode }) {
@@ -95,6 +96,10 @@ export const routers = [
   {
     path: "/activities", name: "activities",
     element: <Lazy><ProtectedRoute requiredRoles={["admin"]}><Activities /></ProtectedRoute></Lazy>,
+  },
+  {
+    path: "/analytics", name: "analytics",
+    element: <Lazy><ProtectedRoute requiredRoles={["admin"]}><ActivityTimeAnalytics /></ProtectedRoute></Lazy>,
   },
   {
     path: "/communications", name: "communications",
