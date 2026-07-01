@@ -28,8 +28,10 @@ export default function EventSlugJoin() {
                     setGuestSession({
                         eventId: result.event_id,
                         eventName: result.event_name,
-                        accessedAt: new Date().toISOString(),
-                        expiresAt: new Date(Date.now() + 24 * 3600000).toISOString(),
+                        accessToken: slug,
+                        accessedAt: new Date(),
+                        expiresAt: new Date(Date.now() + 24 * 3600000),
+                        isValid: true,
                     });
 
                     setStatus('success');

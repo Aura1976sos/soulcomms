@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useEvent } from "@/contexts/EventContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { Input } from "@/components/ui/input";
@@ -110,13 +111,14 @@ export default function CheckIn() {
   // Tracks last scan context for voice announcements
   const lastScanCtx = useRef<{ isQr: boolean; type: AttendeeType }>({ isQr: false, type: "participant" });
   const { activeEvent } = useEvent();
+  const { guestSession, isGuestMode } = useGuest();
   const { online, refreshPending } = useNetwork();
   const { profile } = useAuth();
   const navigate = useNavigate();
 
   const cfg = TYPE_CONFIG[attendeeType];
   const totalCheckedIn = counts.participant + counts.service_provider + counts.crew;
-  const eventId = activeEvent?.id ?? "";
+  const eventId = isGuestMode ? guestSession?.eventId ?? "" : activeEvent?.id ?? "";
 
   // ── Voice announcements ───────────────────────────────────────────────────
   useEffect(() => {
@@ -156,7 +158,7 @@ export default function CheckIn() {
     try {
       // ── OFFLINE path ─────────────────────────────────────────────
       if (!online) {
-        let record: { id: string; code: string; is_checked_in: boolean; [key: string]: unknown } | null = null;
+        let record: { id: string; code: string; is_checked_in: boolean;[key: string]: unknown } | null = null;
 
         if (attendeeType === "participant") {
           record = await offlineLookupParticipant(trimmed, eventId);
@@ -203,7 +205,7 @@ export default function CheckIn() {
         await localCheckIn(
           attendeeType === "participant" ? "participants"
             : attendeeType === "service_provider" ? "service_providers"
-            : "crew_members",
+              : "crew_members",
           record.id
         );
 
@@ -226,19 +228,19 @@ export default function CheckIn() {
       }
 
       // ── ONLINE path ──────────────────────────────────────────────
-      let record: { id: string; code: string; is_checked_in: boolean; [key: string]: unknown } | null = null;
+      let record: { id: string; code: string; is_checked_in: boolean;[key: string]: unknown } | null = null;
 
       if (attendeeType === "participant") {
         const { data, error } = await withTimeout(
           isQrLink
             ? supabase.from("participants")
-                .select("id, code, name, phone, is_checked_in")
-                .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
+              .select("id, code, name, phone, is_checked_in")
+              .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
             : supabase.from("participants")
-                .select("id, code, name, phone, is_checked_in")
-                .eq("event_id", eventId)
-                .or(`code.eq.${trimmed},code.eq.${padded}`)
-                .limit(1).maybeSingle()
+              .select("id, code, name, phone, is_checked_in")
+              .eq("event_id", eventId)
+              .or(`code.eq.${trimmed},code.eq.${padded}`)
+              .limit(1).maybeSingle()
         );
         if (error) throw new Error(error.message);
         record = data;
@@ -247,13 +249,13 @@ export default function CheckIn() {
         const { data, error } = await withTimeout(
           isQrLink
             ? supabase.from("service_providers")
-                .select("id, code, brand_name, contact_person, is_checked_in")
-                .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
+              .select("id, code, brand_name, contact_person, is_checked_in")
+              .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
             : supabase.from("service_providers")
-                .select("id, code, brand_name, contact_person, is_checked_in")
-                .eq("event_id", eventId)
-                .or(`code.eq.${trimmed},code.eq.${padded}`)
-                .limit(1).maybeSingle()
+              .select("id, code, brand_name, contact_person, is_checked_in")
+              .eq("event_id", eventId)
+              .or(`code.eq.${trimmed},code.eq.${padded}`)
+              .limit(1).maybeSingle()
         );
         if (error) throw new Error(error.message);
         record = data;
@@ -262,13 +264,13 @@ export default function CheckIn() {
         const { data, error } = await withTimeout(
           isQrLink
             ? supabase.from("crew_members")
-                .select("id, code, name, department, is_checked_in")
-                .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
+              .select("id, code, name, department, is_checked_in")
+              .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
             : supabase.from("crew_members")
-                .select("id, code, name, department, is_checked_in")
-                .eq("event_id", eventId)
-                .or(`code.eq.${trimmed},code.eq.${padded}`)
-                .limit(1).maybeSingle()
+              .select("id, code, name, department, is_checked_in")
+              .eq("event_id", eventId)
+              .or(`code.eq.${trimmed},code.eq.${padded}`)
+              .limit(1).maybeSingle()
         );
         if (error) throw new Error(error.message);
         record = data;

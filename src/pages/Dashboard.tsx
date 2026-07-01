@@ -7,6 +7,7 @@ import { SyncPanel } from "@/components/dashboard/SyncPanel";
 import { supabase } from "@/integrations/supabase/client";
 import { useEvent } from "@/contexts/EventContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useActivities } from "@/contexts/ActivitiesContext";
 import {
@@ -49,7 +50,12 @@ export default function Dashboard() {
   const { online, refreshPending } = useNetwork();
   const { activeActivities } = useActivities();
   const { role } = useAuth();
+  const { guestSession, isGuestMode } = useGuest();
   const isAdmin = role === "admin" || role === "event_admin";
+
+  // Use guest's eventId if in guest mode, otherwise use activeEvent
+  const currentEventId = isGuestMode ? guestSession?.eventId : activeEvent?.id;
+  const currentEventName = isGuestMode ? guestSession?.eventName : activeEvent?.name;
 
   const [stats, setStats] = useState<DashboardStats>({
     totalRegistered: 0, checkedIn: 0, uniqueParticipantsEngaged: 0,
@@ -66,9 +72,9 @@ export default function Dashboard() {
   const { toast } = useToast();
 
   const fetchStats = useCallback(async () => {
-    if (!activeEvent) { setLoading(false); return; }
+    if (!currentEventId) { setLoading(false); return; }
     try {
-      const eid = activeEvent.id;
+      const eid = currentEventId;
 
       const [
         { count: totalRegistered },
@@ -244,7 +250,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [activeEvent, activeActivities, toast]);
+  }, [currentEventId, activeActivities, toast]);
 
   useEffect(() => {
     fetchStats();
@@ -253,7 +259,7 @@ export default function Dashboard() {
   }, [fetchStats]);
 
   const handleDownloadOffline = async () => {
-    if (!activeEvent) return;
+    if (!currentEventId) return;
     setDownloading(true);
     try {
       triggerEventCacheSync();
@@ -270,7 +276,7 @@ export default function Dashboard() {
   return (
     <AppLayout
       title="Dashboard"
-      subtitle={activeEvent ? `${activeEvent.name} · auto-refresh every 30s` : "Select an event"}
+      subtitle={currentEventName ? `${currentEventName} · auto-refresh every 30s` : "Select an event"}
     >
       <div className="space-y-6">
         {/* Top actions */}
@@ -302,7 +308,7 @@ export default function Dashboard() {
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-          {isAdmin && activeEvent && (
+          {isAdmin && currentEventId && (
             <Button
               variant="outline" size="sm"
               onClick={() => setShowReset(true)}
@@ -550,7 +556,7 @@ export default function Dashboard() {
                     activities={activeActivities}
                     counts={stats.effectiveCounts}
                     totalExperiences={stats.totalExperiences}
-                    eventName={activeEvent?.name ?? "Event"}
+                    eventName={currentEventName ?? "Event"}
                     canDownload={isAdmin}
                   />
                 </div>
@@ -603,10 +609,10 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {showReset && activeEvent && (
+      {showReset && currentEventId && currentEventName && (
         <ResetAttendanceModal
-          eventId={activeEvent.id}
-          eventName={activeEvent.name}
+          eventId={currentEventId}
+          eventName={currentEventName}
           onClose={() => setShowReset(false)}
           onSuccess={() => { setShowReset(false); fetchStats(); }}
         />
