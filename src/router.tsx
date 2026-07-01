@@ -11,6 +11,7 @@ import LiveIndex from "./pages/LiveIndex";
 import LiveEvent from "./pages/LiveEvent";
 import DisplayMode from "./pages/DisplayMode";
 import EventJoin from "./pages/EventJoin";
+import EventSlugJoin from "./pages/EventSlugJoin";
 
 // ── Lazy pages — each loaded only when first navigated to ─────────────────────
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -45,6 +46,7 @@ export const routers = [
   { path: "/live/:slug", name: "live-event", element: <LiveEvent /> },
   { path: "/display", name: "display", element: <DisplayMode /> },
   { path: "/event/:eventId/join/:token", name: "event-join", element: <EventJoin /> },
+  { path: "/event/:slug", name: "event-slug-join", element: <EventSlugJoin /> },
 
   // ── Protected + lazy (Guest users allowed for operational pages) ────────────────
   {

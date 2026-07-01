@@ -443,7 +443,7 @@ export default function Events() {
                       className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
-                    <EventAccessTokenManager eventId={event.id} eventName={event.name} />
+                    <EventAccessTokenManager eventId={event.id} eventName={event.name} eventCode={event.code} />
                     {!isActive && (
                       <Button
                         size="sm"
