@@ -65,43 +65,37 @@ export default function ActivityTimeAnalytics() {
     try {
       setLoading(true);
 
-      // Fetch participant time data
+      // Fetch simple participant data
       const { data: participantData, error: participantError } = await supabase
         .from("participants")
-        .select(`
-          id,
-          name,
-          participant_code,
-          participant_type,
-          activity_participation_time (
-            activity_id,
-            checkin_time,
-            checkout_time
-          ),
-          activities (
-            id,
-            name
-          )
-        `)
+        .select("id, name, participant_code, participant_type")
         .eq("event_id", eventId);
 
       if (participantError) throw participantError;
 
-      // Fetch activity engagement data
-      const { data: activityParticipationData, error: activityError } = await supabase
+      // Fetch all activity participation records
+      const { data: allParticipations, error: participationError } = await supabase
         .from("activity_participation_time")
-        .select(`
-          activity_id,
-          checkin_time,
-          checkout_time,
-          activities (
-            id,
-            name
-          )
-        `)
+        .select("id, event_id, participant_id, activity_id, checkin_time, checkout_time")
         .eq("event_id", eventId);
 
-      if (activityError) throw activityError;
+      if (participationError) throw participationError;
+
+      // Fetch activities to get names
+      const { data: activitiesData, error: activitiesError } = await supabase
+        .from("activities")
+        .select("id, name")
+        .eq("event_id", eventId);
+
+      if (activitiesError) throw activitiesError;
+
+      // Create activity lookup
+      const activityMap = new Map<string, string>();
+      if (activitiesData) {
+        activitiesData.forEach((a: any) => {
+          activityMap.set(a.id, a.name);
+        });
+      }
 
       // Process participant data
       const types = new Set<string>();
@@ -113,39 +107,37 @@ export default function ActivityTimeAnalytics() {
             types.add(participant.participant_type);
           }
 
-          const activityMap = new Map<string, { name: string; minutes: number; count: number }>();
+          // Get participations for this participant
+          const participations = (allParticipations || []).filter(
+            (p: any) => p.participant_id === participant.id
+          );
 
-          // Group participations by activity
-          if (participant.activity_participation_time) {
-            for (const participation of participant.activity_participation_time) {
-              // Find activity name from activities context
-              const activity = participant.activities?.find(
-                (a: any) => a.id === participation.activity_id
-              );
-              const activityName = activity?.name || `Activity ${participation.activity_id}`;
+          const activityActivityMap = new Map<string, { name: string; minutes: number; count: number }>();
 
-              if (!activityMap.has(participation.activity_id)) {
-                activityMap.set(participation.activity_id, {
-                  name: activityName,
-                  minutes: 0,
-                  count: 0,
-                });
-              }
+          for (const participation of participations) {
+            const activityName = activityMap.get(participation.activity_id) || `Activity ${participation.activity_id}`;
 
-              const data = activityMap.get(participation.activity_id)!;
-              data.count += 1;
+            if (!activityActivityMap.has(participation.activity_id)) {
+              activityActivityMap.set(participation.activity_id, {
+                name: activityName,
+                minutes: 0,
+                count: 0,
+              });
+            }
 
-              // Calculate duration
-              if (participation.checkout_time && participation.checkin_time) {
-                const checkoutTime = new Date(participation.checkout_time).getTime();
-                const checkinTime = new Date(participation.checkin_time).getTime();
-                const minutes = Math.round((checkoutTime - checkinTime) / 60000);
-                data.minutes += minutes;
-              }
+            const data = activityActivityMap.get(participation.activity_id)!;
+            data.count += 1;
+
+            // Calculate duration
+            if (participation.checkout_time && participation.checkin_time) {
+              const checkoutTime = new Date(participation.checkout_time).getTime();
+              const checkinTime = new Date(participation.checkin_time).getTime();
+              const minutes = Math.round((checkoutTime - checkinTime) / 60000);
+              data.minutes += Math.max(0, minutes); // Ensure non-negative
             }
           }
 
-          const activitiesList = Array.from(activityMap.entries()).map(([_, data]) => ({
+          const activitiesList = Array.from(activityActivityMap.entries()).map(([_, data]) => ({
             activity_name: data.name,
             total_minutes: data.minutes,
             checkin_count: data.count,
@@ -168,20 +160,20 @@ export default function ActivityTimeAnalytics() {
       setParticipants(processedParticipants.sort((a, b) => b.total_minutes - a.total_minutes));
 
       // Process activity engagement data
-      const activityMap = new Map<string, {
+      const engagementMap = new Map<string, {
         name: string;
         participants: Set<string>;
         checkins: number;
         totalMinutes: number;
       }>();
 
-      if (activityParticipationData) {
-        for (const record of activityParticipationData) {
-          const activityName = record.activities?.[0]?.name || `Activity ${record.activity_id}`;
+      if (allParticipations) {
+        for (const record of allParticipations) {
+          const activityName = activityMap.get(record.activity_id) || `Activity ${record.activity_id}`;
           const activityId = record.activity_id;
 
-          if (!activityMap.has(activityId)) {
-            activityMap.set(activityId, {
+          if (!engagementMap.has(activityId)) {
+            engagementMap.set(activityId, {
               name: activityName,
               participants: new Set(),
               checkins: 0,
@@ -189,7 +181,8 @@ export default function ActivityTimeAnalytics() {
             });
           }
 
-          const data = activityMap.get(activityId)!;
+          const data = engagementMap.get(activityId)!;
+          data.participants.add(record.participant_id);
           data.checkins += 1;
 
           // Calculate duration
@@ -197,12 +190,12 @@ export default function ActivityTimeAnalytics() {
             const checkoutTime = new Date(record.checkout_time).getTime();
             const checkinTime = new Date(record.checkin_time).getTime();
             const minutes = Math.round((checkoutTime - checkinTime) / 60000);
-            data.totalMinutes += minutes;
+            data.totalMinutes += Math.max(0, minutes); // Ensure non-negative
           }
         }
       }
 
-      const engagementList: ActivityEngagementData[] = Array.from(activityMap.entries()).map(
+      const engagementList: ActivityEngagementData[] = Array.from(engagementMap.entries()).map(
         ([_, data]) => {
           const avgDuration = data.checkins > 0 ? Math.round(data.totalMinutes / data.checkins) : 0;
           return {
