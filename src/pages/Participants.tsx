@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useEvent } from "@/contexts/EventContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -40,8 +41,10 @@ export default function Participants() {
   const [hasSearched, setHasSearched] = useState(false);
   const [showUncheck, setShowUncheck] = useState(false);
   const { activeEvent } = useEvent();
+  const { guestSession, isGuestMode } = useGuest();
   const { role } = useAuth();
   const canUncheck = role === "admin" || role === "event_admin";
+  const currentEventId = isGuestMode ? guestSession?.eventId : activeEvent?.id;
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -55,7 +58,7 @@ export default function Participants() {
       .order("code", { ascending: true })
       .limit(PAGE_SIZE);
 
-    if (activeEvent) queryBuilder = queryBuilder.eq("event_id", activeEvent.id);
+    if (currentEventId) queryBuilder = queryBuilder.eq("event_id", currentEventId);
 
     // Status filter
     if (status === "checked_in") queryBuilder = queryBuilder.eq("is_checked_in", true);
@@ -83,7 +86,7 @@ export default function Participants() {
     setResults((data ?? []) as Participant[]);
     setTotal(count ?? null);
     setLoadingList(false);
-  }, [activeEvent]);
+  }, [currentEventId]);
 
   const handleQueryChange = (value: string) => {
     setQuery(value);
@@ -122,7 +125,7 @@ export default function Participants() {
       .from("participants")
       .select("code, name, phone, is_checked_in")
       .order("code", { ascending: true });
-    if (activeEvent) q = q.eq("event_id", activeEvent.id);
+    if (currentEventId) q = q.eq("event_id", currentEventId);
     const { data } = await q;
 
     if (!data) return;
@@ -291,14 +294,14 @@ export default function Participants() {
                 />
               )}
 
-              {showUncheck && selected && activeEvent && (
+              {showUncheck && selected && currentEventId && (
                 <UncheckModal
                   type="participant"
                   id={selected.id}
                   name={selected.name}
                   code={selected.code}
                   checkedInAt={selected.checked_in_at}
-                  eventId={activeEvent.id}
+                  eventId={currentEventId}
                   onClose={() => setShowUncheck(false)}
                   onSuccess={() => {
                     setShowUncheck(false);

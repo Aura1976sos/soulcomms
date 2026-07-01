@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useEvent } from "@/contexts/EventContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -52,13 +53,15 @@ export default function ServiceProviders() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { activeEvent } = useEvent();
+  const { guestSession, isGuestMode } = useGuest();
   const { role } = useAuth();
   const canUncheck = role === "admin" || role === "event_admin";
+  const currentEventId = isGuestMode ? guestSession?.eventId : activeEvent?.id;
 
   const fetchProviders = useCallback(async (q: string, f: Filter) => {
     setLoading(true);
     let req = supabase.from("service_providers").select("*", { count: "exact" });
-    if (activeEvent) req = req.eq("event_id", activeEvent.id);
+    if (currentEventId) req = req.eq("event_id", currentEventId);
     if (q.trim()) {
       req = req.or(`code.ilike.%${q}%,brand_name.ilike.%${q}%,contact_person.ilike.%${q}%,phone.ilike.%${q}%`);
     }
@@ -69,7 +72,7 @@ export default function ServiceProviders() {
     setProviders((data as ServiceProvider[]) ?? []);
     if (!q && f === "all") setTotal(count ?? 0);
     setLoading(false);
-  }, [activeEvent]);
+  }, [currentEventId]);
 
   useEffect(() => {
     const t = setTimeout(() => fetchProviders(query, filter), 300);
@@ -290,14 +293,14 @@ export default function ServiceProviders() {
               </>
             )}
 
-            {showUncheck && selected && activeEvent && (
+            {showUncheck && selected && currentEventId && (
               <UncheckModal
                 type="service_provider"
                 id={selected.id}
                 name={selected.brand_name}
                 code={selected.code}
                 checkedInAt={selected.checked_in_at}
-                eventId={activeEvent.id}
+                eventId={currentEventId}
                 onClose={() => setShowUncheck(false)}
                 onSuccess={() => {
                   setShowUncheck(false);

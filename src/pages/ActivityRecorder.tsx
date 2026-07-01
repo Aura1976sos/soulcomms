@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEvent } from "@/contexts/EventContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useActivities, Activity } from "@/contexts/ActivitiesContext";
 import { resolveIcon } from "@/lib/experiences";
@@ -141,11 +142,13 @@ export default function ActivityRecorder() {
 
   const { user } = useAuth();
   const { activeEvent } = useEvent();
+  const { guestSession, isGuestMode } = useGuest();
   const { online, refreshPending } = useNetwork();
   const { activeActivities, loading: activitiesLoading } = useActivities();
   const navigate = useNavigate();
 
-  const eventId = activeEvent?.id ?? "";
+  const eventId = isGuestMode ? (guestSession?.eventId ?? "") : (activeEvent?.id ?? "");
+  const eventName = isGuestMode ? (guestSession?.eventName ?? "Event") : (activeEvent?.name ?? "Event");
 
   // Group by category for display
   const grouped = activeActivities
@@ -619,7 +622,7 @@ export default function ActivityRecorder() {
             phone: foundParticipant.phone,
           }}
           eventId={eventId}
-          eventName={activeEvent?.name ?? "Event"}
+          eventName={eventName}
           staffName={user?.email ?? "Staff"}
           online={online}
           onClose={() => setSessionActivity(null)}

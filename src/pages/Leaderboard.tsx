@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useEvent } from "@/contexts/EventContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { useActivities } from "@/contexts/ActivitiesContext";
 import { resolveIcon } from "@/lib/experiences";
 import { Trophy, Zap, Wifi } from "lucide-react";
@@ -17,11 +18,13 @@ export default function Leaderboard() {
   const [filter, setFilter] = useState<string>("all");
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const { activeEvent } = useEvent();
+  const { guestSession, isGuestMode } = useGuest();
   const { activeActivities } = useActivities();
+  const currentEventId = isGuestMode ? guestSession?.eventId : activeEvent?.id;
 
   const fetchLeaderboard = useCallback(async () => {
     setLoading(true);
-    const eventId = activeEvent?.id;
+    const eventId = currentEventId;
     try {
       if (filter === "all") {
         let q = supabase
@@ -66,7 +69,7 @@ export default function Leaderboard() {
     } finally {
       setLoading(false);
     }
-  }, [filter, activeEvent]);
+  }, [filter, currentEventId]);
 
   useEffect(() => { fetchLeaderboard(); }, [fetchLeaderboard]);
 

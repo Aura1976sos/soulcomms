@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEvent } from "@/contexts/EventContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useCommunications } from "@/contexts/CommunicationsContext";
 import { useChannelMessages } from "@/hooks/useChannelMessages";
@@ -46,6 +47,7 @@ interface SelectedChannelMeta {
 export default function Communications() {
   const { user, profile, role } = useAuth();
   const { activeEvent } = useEvent();
+  const { guestSession, isGuestMode } = useGuest();
   const { online } = useNetwork();
   const { markChannelRead, refreshUnread } = useCommunications();
   const [searchParams] = useSearchParams();
@@ -53,7 +55,7 @@ export default function Communications() {
   const [leftTab, setLeftTab] = useState<LeftTab>("channels");
   const [groupChannels, setGroupChannels] = useState<Channel[]>([]);
   const [dmChannels, setDmChannels] = useState<Channel[]>([]);
-  const [staff, setStaff]           = useState<StaffMember[]>([]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [selectedChannelName, setSelectedChannelName] = useState("");
   const [selectedChannelMeta, setSelectedChannelMeta] = useState<SelectedChannelMeta | null>(null);
@@ -63,15 +65,16 @@ export default function Communications() {
   const [showManageChannel, setShowManageChannel] = useState(false);
 
   const canAdmin = role === "admin" || role === "event_admin";
+  const currentEventId = isGuestMode ? guestSession?.eventId : activeEvent?.id;
 
   // URL params
-  const escalateType        = searchParams.get("escalate");
-  const escalateCode        = searchParams.get("code");
-  const escalateError       = searchParams.get("error");
+  const escalateType = searchParams.get("escalate");
+  const escalateCode = searchParams.get("code");
+  const escalateError = searchParams.get("error");
   const escalateParticipant = searchParams.get("participant");
-  const escalateActivity    = searchParams.get("activity");
-  const dmTarget            = searchParams.get("dm");
-  const startDmStaffId      = searchParams.get("startDm");
+  const escalateActivity = searchParams.get("activity");
+  const dmTarget = searchParams.get("dm");
+  const startDmStaffId = searchParams.get("startDm");
 
   const prefillMsg = escalateType
     ? escalateType === "checkin"
@@ -97,11 +100,11 @@ export default function Communications() {
   }, [user?.id]);
 
   const init = useCallback(async () => {
-    if (!activeEvent?.id || !user?.id || initialized) return;
-    await supabase.rpc("ensure_event_channels", { p_event_id: activeEvent.id });
+    if (!currentEventId || !user?.id || initialized) return;
+    await supabase.rpc("ensure_event_channels", { p_event_id: currentEventId });
     setInitialized(true);
     await loadChannels();
-  }, [activeEvent?.id, user?.id, initialized]); // eslint-disable-line
+  }, [currentEventId, user?.id, initialized]); // eslint-disable-line
 
   const loadChannels = useCallback(async () => {
     if (!user?.id) return;
@@ -165,21 +168,21 @@ export default function Communications() {
               .neq("staff_id", user.id)
               .limit(1);
             const peer = members?.[0]?.staff_profiles as { name?: string; role?: string } | null;
-            dmPeerName     = peer?.name ?? "Direct Message";
-            dmPeerRole     = peer?.role ? getRoleDef(peer.role)?.label : undefined;
-            dmPeerStaffId  = members?.[0]?.staff_id;
+            dmPeerName = peer?.name ?? "Direct Message";
+            dmPeerRole = peer?.role ? getRoleDef(peer.role)?.label : undefined;
+            dmPeerStaffId = members?.[0]?.staff_id;
           }
 
           return {
-            id:            ch.id,
-            name:          ch.name,
-            slug:          ch.slug,
-            type:          ch.type,
-            description:   ch.description,
-            createdBy:     ch.created_by,
-            unread:        unread ?? 0,
-            lastMessage:   last?.[0]?.content,
-            lastAt:        last?.[0]?.created_at,
+            id: ch.id,
+            name: ch.name,
+            slug: ch.slug,
+            type: ch.type,
+            description: ch.description,
+            createdBy: ch.created_by,
+            unread: unread ?? 0,
+            lastMessage: last?.[0]?.content,
+            lastAt: last?.[0]?.created_at,
             dmPeerName,
             dmPeerRole,
             dmPeerStaffId,
@@ -261,12 +264,12 @@ export default function Communications() {
     setSelectedChannelId(ch.id);
     setSelectedChannelName(displayName);
     setSelectedChannelMeta({
-      id:          ch.id,
-      name:        ch.name ?? "Channel",
-      slug:        ch.slug ?? null,
+      id: ch.id,
+      name: ch.name ?? "Channel",
+      slug: ch.slug ?? null,
       description: (ch as Channel & { description?: string | null }).description ?? null,
-      createdBy:   (ch as Channel & { createdBy?: string | null }).createdBy ?? null,
-      type:        ch.type,
+      createdBy: (ch as Channel & { createdBy?: string | null }).createdBy ?? null,
+      type: ch.type,
     });
     setCanBroadcast(canAdmin && ch.type !== "dm");
     markChannelRead(ch.id);
@@ -315,9 +318,9 @@ export default function Communications() {
           )}
           <div className="flex border-b border-border">
             {([
-              { key: "channels",  label: "Channels",   icon: Hash },
-              { key: "dms",       label: "DMs",         icon: MessageCircle },
-              { key: "directory", label: "Directory",   icon: Users },
+              { key: "channels", label: "Channels", icon: Hash },
+              { key: "dms", label: "DMs", icon: MessageCircle },
+              { key: "directory", label: "Directory", icon: Users },
             ] as { key: LeftTab; label: string; icon: typeof Hash }[]).map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
@@ -451,31 +454,31 @@ export default function Communications() {
                 <p className="text-[11px] font-semibold">Offline Mode — messages will sync automatically when you reconnect.</p>
               </div>
             )}
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-12">
-            <div className="p-4 rounded-2xl bg-secondary mb-4">
-              <MessageSquare className="h-10 w-10 text-muted-foreground/40" />
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-12">
+              <div className="p-4 rounded-2xl bg-secondary mb-4">
+                <MessageSquare className="h-10 w-10 text-muted-foreground/40" />
+              </div>
+              <p className="text-base font-bold text-foreground mb-1">Select a channel or staff member</p>
+              <p className="text-sm text-muted-foreground max-w-xs">
+                Choose a group channel from Channels tab, or click any staff member in the DMs or Directory tab to start a conversation.
+              </p>
+              {canAdmin && (
+                <button
+                  onClick={() => { setLeftTab("channels"); setShowCreateChannel(true); }}
+                  className="mt-4 flex items-center gap-2 text-xs text-primary font-semibold hover:underline"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Create your first channel
+                </button>
+              )}
             </div>
-            <p className="text-base font-bold text-foreground mb-1">Select a channel or staff member</p>
-            <p className="text-sm text-muted-foreground max-w-xs">
-              Choose a group channel from Channels tab, or click any staff member in the DMs or Directory tab to start a conversation.
-            </p>
-            {canAdmin && (
-              <button
-                onClick={() => { setLeftTab("channels"); setShowCreateChannel(true); }}
-                className="mt-4 flex items-center gap-2 text-xs text-primary font-semibold hover:underline"
-              >
-                <Plus className="h-3.5 w-3.5" /> Create your first channel
-              </button>
-            )}
-          </div>
           </div>
         )}
       </div>
 
       {/* Modals */}
-      {showCreateChannel && activeEvent && user && (
+      {showCreateChannel && currentEventId && user && (
         <CreateChannelModal
-          eventId={activeEvent.id}
+          eventId={currentEventId}
           creatorId={user.id}
           onClose={() => setShowCreateChannel(false)}
           onCreated={async () => {
