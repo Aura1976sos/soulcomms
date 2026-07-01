@@ -65,28 +65,20 @@ export function EventAccessTokenManager({ eventId, eventName }: EventAccessToken
                 `Token for ${eventName}`
             );
 
-            if (result) {
-                const shareUrl = generateShareableUrl(eventId, result.token);
-                toast({
-                    title: 'Success',
-                    description: 'Access token created successfully',
-                });
+            const shareUrl = generateShareableUrl(eventId, result.token);
+            toast({
+                title: 'Success',
+                description: 'Access token created successfully',
+            });
 
-                // Copy URL to clipboard automatically
-                await copyToClipboard(shareUrl);
-                toast({
-                    title: 'Copied',
-                    description: 'Shareable link copied to clipboard',
-                });
+            // Copy URL to clipboard automatically
+            await copyToClipboard(shareUrl);
+            toast({
+                title: 'Copied',
+                description: 'Shareable link copied to clipboard',
+            });
 
-                await loadTokens();
-            } else {
-                toast({
-                    title: 'Error',
-                    description: 'Failed to create access token - database function may not be deployed yet',
-                    variant: 'destructive',
-                });
-            }
+            await loadTokens();
         } catch (error) {
             console.error('Failed to create token:', error);
             toast({

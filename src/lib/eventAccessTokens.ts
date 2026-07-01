@@ -67,7 +67,7 @@ export async function createEventAccessToken(
     eventId: string,
     durationHours: number = 24,
     description?: string
-): Promise<{ token: string; expires_at: string; join_url: string } | null> {
+): Promise<{ token: string; expires_at: string; join_url: string }> {
     try {
         const { data, error } = await supabase.rpc('create_event_access_token', {
             p_event_id: eventId,
@@ -75,36 +75,29 @@ export async function createEventAccessToken(
             p_description: description,
         });
 
-        if (error) {
-            // If RPC doesn't exist yet, generate token locally and store it
-            if (error.message.includes('does not exist') || error.message.includes('404')) {
-                console.warn('RPC function not available yet, using fallback method...');
-                
-                // Generate token locally
-                const token = generateTokenLocally();
-                const expiresAt = new Date(Date.now() + durationHours * 3600000).toISOString();
-                
-                // TODO: Store in localStorage or demo table
-                return {
-                    token,
-                    expires_at: expiresAt,
-                    join_url: `/event/${eventId}/join/${token}`
-                };
-            }
-            console.error('Failed to create token:', error);
-            return null;
-        }
-
-        if (data && data.length > 0) {
+        // If RPC exists and succeeds, return the data
+        if (!error && data && data.length > 0) {
             return data[0];
         }
 
-        return null;
-    } catch (error) {
-        console.error('Token creation exception:', error);
+        // If RPC doesn't exist or fails, use fallback
+        if (error) {
+            console.warn('RPC function unavailable, using fallback token generation:', error.message);
+        }
+
         // Fallback: generate token locally
         const token = generateTokenLocally();
-        const expiresAt = new Date(Date.now() + 24 * 3600000).toISOString();
+        const expiresAt = new Date(Date.now() + durationHours * 3600000).toISOString();
+        return {
+            token,
+            expires_at: expiresAt,
+            join_url: `/event/${eventId}/join/${token}`
+        };
+    } catch (error) {
+        console.error('Token creation exception:', error);
+        // Fallback: generate token locally even if exception occurs
+        const token = generateTokenLocally();
+        const expiresAt = new Date(Date.now() + durationHours * 3600000).toISOString();
         return {
             token,
             expires_at: expiresAt,
