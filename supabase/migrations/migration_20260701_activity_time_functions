@@ -1,0 +1,176 @@
+-- Function to handle participant activity checkin with automatic checkout
+CREATE OR REPLACE FUNCTION handle_activity_checkin(
+  p_event_id UUID,
+  p_participant_id UUID,
+  p_activity_id UUID,
+  p_checkin_time TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+)
+RETURNS TABLE (
+  success BOOLEAN,
+  message TEXT,
+  participation_id UUID,
+  previous_activity_id UUID,
+  previous_duration_minutes INT
+) 
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_previous_activity_record RECORD;
+  v_new_participation_id UUID;
+BEGIN
+  -- Find the participant's last unchecked-out activity
+  SELECT id, activity_id INTO v_previous_activity_record
+  FROM activity_participation_time
+  WHERE participant_id = p_participant_id
+    AND event_id = p_event_id
+    AND checkout_time IS NULL
+  ORDER BY checkin_time DESC
+  LIMIT 1;
+
+  -- If there's an active activity, auto-checkout
+  IF v_previous_activity_record.id IS NOT NULL THEN
+    UPDATE activity_participation_time
+    SET 
+      checkout_time = p_checkin_time,
+      updated_at = NOW()
+    WHERE id = v_previous_activity_record.id
+    RETURNING duration_minutes INTO v_previous_activity_record.activity_id;
+  END IF;
+
+  -- Create new checkin record
+  INSERT INTO activity_participation_time (
+    event_id,
+    participant_id,
+    activity_id,
+    checkin_time
+  )
+  VALUES (
+    p_event_id,
+    p_participant_id,
+    p_activity_id,
+    p_checkin_time
+  )
+  RETURNING activity_participation_time.id INTO v_new_participation_id;
+
+  RETURN QUERY SELECT
+    true,
+    'Activity checkin recorded successfully',
+    v_new_participation_id,
+    v_previous_activity_record.activity_id,
+    (EXTRACT(EPOCH FROM (p_checkin_time - (
+      SELECT checkin_time FROM activity_participation_time 
+      WHERE id = v_previous_activity_record.id
+    )))::INT / 60)
+  ;
+EXCEPTION WHEN OTHERS THEN
+  RETURN QUERY SELECT
+    false,
+    'Error: ' || SQLERRM,
+    NULL::UUID,
+    NULL::UUID,
+    0;
+END;
+$$;
+
+-- Function to manually checkout from an activity
+CREATE OR REPLACE FUNCTION handle_activity_checkout(
+  p_participation_id UUID,
+  p_checkout_time TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+)
+RETURNS TABLE (
+  success BOOLEAN,
+  message TEXT,
+  duration_minutes INT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_duration INT;
+BEGIN
+  UPDATE activity_participation_time
+  SET 
+    checkout_time = p_checkout_time,
+    updated_at = NOW()
+  WHERE id = p_participation_id
+  RETURNING duration_minutes INTO v_duration;
+
+  IF FOUND THEN
+    RETURN QUERY SELECT
+      true,
+      'Activity checkout recorded successfully',
+      v_duration;
+  ELSE
+    RETURN QUERY SELECT
+      false,
+      'Participation record not found',
+      0;
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RETURN QUERY SELECT
+    false,
+    'Error: ' || SQLERRM,
+    0;
+END;
+$$;
+
+-- Function to get participant's time summary for an event
+CREATE OR REPLACE FUNCTION get_participant_activity_summary(
+  p_event_id UUID,
+  p_participant_id UUID
+)
+RETURNS TABLE (
+  activity_id UUID,
+  activity_name TEXT,
+  total_visits INT,
+  total_minutes INT,
+  last_checkin TIMESTAMP WITH TIME ZONE,
+  is_currently_active BOOLEAN
+)
+LANGUAGE SQL
+SECURITY DEFINER
+AS $$
+SELECT
+  apt.activity_id,
+  a.name,
+  COUNT(*) as total_visits,
+  COALESCE(SUM(apt.duration_minutes), 0) as total_minutes,
+  MAX(apt.checkin_time) as last_checkin,
+  (MAX(apt.checkout_time) IS NULL AND COUNT(*) > 0) as is_currently_active
+FROM activity_participation_time apt
+LEFT JOIN activities a ON a.id = apt.activity_id
+WHERE apt.event_id = p_event_id
+  AND apt.participant_id = p_participant_id
+GROUP BY apt.activity_id, a.name
+ORDER BY total_minutes DESC;
+$$;
+
+-- Function to get activity's time statistics
+CREATE OR REPLACE FUNCTION get_activity_time_statistics(
+  p_event_id UUID,
+  p_activity_id UUID
+)
+RETURNS TABLE (
+  total_participants INT,
+  total_checkins INT,
+  average_duration_minutes INT,
+  min_duration_minutes INT,
+  max_duration_minutes INT,
+  total_time_hours NUMERIC
+)
+LANGUAGE SQL
+SECURITY DEFINER
+AS $$
+SELECT
+  COUNT(DISTINCT participant_id)::INT as total_participants,
+  COUNT(*)::INT as total_checkins,
+  AVG(COALESCE(duration_minutes, 0))::INT as average_duration_minutes,
+  MIN(COALESCE(duration_minutes, 0))::INT as min_duration_minutes,
+  MAX(COALESCE(duration_minutes, 0))::INT as max_duration_minutes,
+  ROUND(SUM(COALESCE(duration_minutes, 0))::NUMERIC / 60, 2) as total_time_hours
+FROM activity_participation_time
+WHERE event_id = p_event_id
+  AND activity_id = p_activity_id
+  AND checkout_time IS NOT NULL;
+$$;

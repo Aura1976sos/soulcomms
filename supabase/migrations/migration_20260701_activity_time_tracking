@@ -1,0 +1,97 @@
+-- Create activity_participation_time table for tracking time spent by participants on activities
+CREATE TABLE IF NOT EXISTS activity_participation_time (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  participant_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+  activity_id UUID NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+  checkin_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  checkout_time TIMESTAMP WITH TIME ZONE,
+  duration_minutes INT GENERATED ALWAYS AS (
+    EXTRACT(EPOCH FROM (COALESCE(checkout_time, NOW()) - checkin_time))::INT / 60
+  ) STORED,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create indexes for faster queries
+CREATE INDEX idx_activity_participation_event ON activity_participation_time(event_id);
+CREATE INDEX idx_activity_participation_participant ON activity_participation_time(participant_id);
+CREATE INDEX idx_activity_participation_activity ON activity_participation_time(activity_id);
+CREATE INDEX idx_activity_participation_checkin ON activity_participation_time(checkin_time);
+
+-- Enable RLS
+ALTER TABLE activity_participation_time ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policy: Users can see participation data for their events
+CREATE POLICY "Users can view participation time for their events"
+  ON activity_participation_time
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM events e
+      WHERE e.id = activity_participation_time.event_id
+      AND (
+        e.created_by = auth.uid()
+        OR EXISTS (
+          SELECT 1 FROM staff_profiles sp
+          WHERE sp.user_id = auth.uid()
+          AND sp.event_id = e.id
+          AND sp.role IN ('admin', 'staff')
+        )
+      )
+    )
+  );
+
+-- RLS Policy: Admins can insert participation records
+CREATE POLICY "Admins can create participation records"
+  ON activity_participation_time
+  FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM events e
+      WHERE e.id = event_id
+      AND (
+        e.created_by = auth.uid()
+        OR EXISTS (
+          SELECT 1 FROM staff_profiles sp
+          WHERE sp.user_id = auth.uid()
+          AND sp.event_id = e.id
+          AND sp.role IN ('admin', 'staff')
+        )
+      )
+    )
+  );
+
+-- RLS Policy: Admins can update checkout times
+CREATE POLICY "Admins can update participation records"
+  ON activity_participation_time
+  FOR UPDATE
+  USING (
+    EXISTS (
+      SELECT 1 FROM events e
+      WHERE e.id = event_id
+      AND (
+        e.created_by = auth.uid()
+        OR EXISTS (
+          SELECT 1 FROM staff_profiles sp
+          WHERE sp.user_id = auth.uid()
+          AND sp.event_id = e.id
+          AND sp.role IN ('admin', 'staff')
+        )
+      )
+    )
+  );
+
+-- View to get current activity for each participant
+CREATE OR REPLACE VIEW v_participant_current_activity AS
+SELECT 
+  apt.participant_id,
+  apt.event_id,
+  apt.activity_id,
+  a.name as activity_name,
+  apt.checkin_time,
+  apt.duration_minutes,
+  ROW_NUMBER() OVER (PARTITION BY apt.participant_id, apt.event_id ORDER BY apt.checkin_time DESC) as rn
+FROM activity_participation_time apt
+LEFT JOIN activities a ON a.id = apt.activity_id
+WHERE apt.checkout_time IS NULL;
