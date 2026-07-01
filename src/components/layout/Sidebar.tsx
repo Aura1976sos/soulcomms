@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useGuest } from "@/contexts/GuestContext";
 import { useEvent } from "@/contexts/EventContext";
 import { useCommunications } from "@/contexts/CommunicationsContext";
 import { SoulcommsLogo } from "@/components/brand/SoulcommsLogo";
@@ -52,16 +53,102 @@ const navGroups = [
 
 export const Sidebar = ({ onClose }: SidebarProps) => {
   const { profile, role, signOut } = useAuth();
+  const { isGuestMode, guestSession, clearGuestSession } = useGuest();
   const { activeEvent, events, setActiveEvent } = useEvent();
   const { totalUnread, mentionCount } = useCommunications();
   const navigate = useNavigate();
   const [showEventPicker, setShowEventPicker] = useState(false);
 
   const handleSignOut = async () => {
-    await signOut();
-    navigate("/login");
+    if (isGuestMode) {
+      clearGuestSession();
+      navigate("/login");
+    } else {
+      await signOut();
+      navigate("/login");
+    }
   };
 
+  // For guest mode, show minimal navigation
+  if (isGuestMode) {
+    return (
+      <div className="flex flex-col h-full bg-sidebar border-r border-sidebar-border">
+        {/* Header */}
+        <div className="p-5 border-b border-sidebar-border">
+          <div className="flex items-center justify-between mb-3">
+            <SoulcommsLogo size="sm" />
+            {onClose && (
+              <Button variant="ghost" size="icon" onClick={onClose} className="text-muted-foreground hover:text-foreground h-7 w-7">
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+          {/* Show event name for guest */}
+          {guestSession && (
+            <div className="w-full px-3 py-2.5 rounded-xl bg-primary/10 border border-primary/20">
+              <p className="text-xs font-bold text-foreground truncate leading-tight">{guestSession.eventName}</p>
+              <p className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mt-0.5">Guest Access</p>
+            </div>
+          )}
+        </div>
+
+        {/* Nav - Only CheckIn and ActivityRecorder */}
+        <nav className="flex-1 p-4 space-y-4 overflow-y-auto">
+          <div>
+            <p className="px-4 mb-1.5 text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground/60">
+              Operations
+            </p>
+            <div className="space-y-0.5">
+              <NavLink
+                to="/checkin"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150",
+                    isActive
+                      ? "bg-primary text-primary-foreground shadow-glow-primary"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground"
+                  )
+                }
+              >
+                <ScanLine className="h-4 w-4 shrink-0" />
+                Check-In Station
+              </NavLink>
+              <NavLink
+                to="/activity"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150",
+                    isActive
+                      ? "bg-primary text-primary-foreground shadow-glow-primary"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground"
+                  )
+                }
+              >
+                <Zap className="h-4 w-4 shrink-0" />
+                Activity Recorder
+              </NavLink>
+            </div>
+          </div>
+        </nav>
+
+        {/* Footer - Logout */}
+        <div className="p-4 border-t border-sidebar-border">
+          <Button
+            onClick={handleSignOut}
+            variant="ghost"
+            className="w-full flex gap-2 text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground justify-start px-4"
+          >
+            <LogOut className="h-4 w-4" />
+            End Session
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // For authenticated users, show full navigation
   return (
     <div className="flex flex-col h-full bg-sidebar border-r border-sidebar-border">
       {/* Header */}

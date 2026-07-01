@@ -48,10 +48,10 @@ export const routers = [
   { path: "/event/:eventId/join/:token", name: "event-join", element: <EventJoin /> },
   { path: "/event/:slug", name: "event-slug-join", element: <EventSlugJoin /> },
 
-  // ── Protected + lazy (Guest users allowed for operational pages) ────────────────
+  // ── Protected + lazy ──────────────────────────────────────────────────────────
   {
     path: "/dashboard", name: "dashboard",
-    element: <Lazy><ProtectedRoute allowGuests={true}><Dashboard /></ProtectedRoute></Lazy>,
+    element: <Lazy><ProtectedRoute><Dashboard /></ProtectedRoute></Lazy>,
   },
   {
     path: "/checkin", name: "checkin",
@@ -63,23 +63,23 @@ export const routers = [
   },
   {
     path: "/participants", name: "participants",
-    element: <Lazy><ProtectedRoute allowGuests={true}><Participants /></ProtectedRoute></Lazy>,
+    element: <Lazy><ProtectedRoute><Participants /></ProtectedRoute></Lazy>,
   },
   {
     path: "/service-providers", name: "service-providers",
-    element: <Lazy><ProtectedRoute allowGuests={true}><ServiceProviders /></ProtectedRoute></Lazy>,
+    element: <Lazy><ProtectedRoute><ServiceProviders /></ProtectedRoute></Lazy>,
   },
   {
     path: "/crew", name: "crew",
-    element: <Lazy><ProtectedRoute allowGuests={true}><CrewMembers /></ProtectedRoute></Lazy>,
+    element: <Lazy><ProtectedRoute><CrewMembers /></ProtectedRoute></Lazy>,
   },
   {
     path: "/leaderboard", name: "leaderboard",
-    element: <Lazy><ProtectedRoute allowGuests={true}><Leaderboard /></ProtectedRoute></Lazy>,
+    element: <Lazy><ProtectedRoute><Leaderboard /></ProtectedRoute></Lazy>,
   },
   {
     path: "/communications", name: "communications",
-    element: <Lazy><ProtectedRoute allowGuests={true}><Communications /></ProtectedRoute></Lazy>,
+    element: <Lazy><ProtectedRoute><Communications /></ProtectedRoute></Lazy>,
   },
 
   // ── Admin-only pages (no guest access) ────────────────────────────────────────

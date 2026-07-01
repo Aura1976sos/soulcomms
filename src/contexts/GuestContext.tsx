@@ -28,7 +28,7 @@ export function GuestProvider({ children }: { children: React.ReactNode }) {
         // Only load guest session if user is not authenticated
         // If user is authenticated, guest mode should be disabled
         if (authLoading) return; // Wait for auth to load
-        
+
         if (user) {
             // User is authenticated - clear guest session
             localStorage.removeItem('guest_session');
