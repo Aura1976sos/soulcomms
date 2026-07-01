@@ -10,6 +10,7 @@ import { NetworkProvider } from "./contexts/NetworkContext";
 import { ActivitiesProvider } from "./contexts/ActivitiesContext";
 import { CommunicationsProvider } from "./contexts/CommunicationsContext";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { GuestProvider } from "./contexts/GuestContext";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -22,19 +23,21 @@ const App = () => (
   <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <EventProvider>
-          <ActivitiesProvider>
-            <NetworkProvider>
-              <CommunicationsProvider>
-                <TooltipProvider>
-                  <Toaster />
-                  <Sonner />
-                  <RouterProvider router={router} />
-                </TooltipProvider>
-              </CommunicationsProvider>
-            </NetworkProvider>
-          </ActivitiesProvider>
-        </EventProvider>
+        <GuestProvider>
+          <EventProvider>
+            <ActivitiesProvider>
+              <NetworkProvider>
+                <CommunicationsProvider>
+                  <TooltipProvider>
+                    <Toaster />
+                    <Sonner />
+                    <RouterProvider router={router} />
+                  </TooltipProvider>
+                </CommunicationsProvider>
+              </NetworkProvider>
+            </ActivitiesProvider>
+          </EventProvider>
+        </GuestProvider>
       </AuthProvider>
     </QueryClientProvider>
   </ErrorBoundary>

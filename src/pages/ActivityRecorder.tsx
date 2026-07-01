@@ -118,26 +118,26 @@ export default function ActivityRecorder() {
   const [appTab, setAppTab] = useState<AppTab>("recorder");
 
   // ── Step machine ─────────────────────────────────────────────────────────────
-  const [step, setStep]               = useState<Step>("search");
-  const [findStatus, setFindStatus]   = useState<FindStatus>("idle");
-  const [query, setQuery]             = useState("");
+  const [step, setStep] = useState<Step>("search");
+  const [findStatus, setFindStatus] = useState<FindStatus>("idle");
+  const [query, setQuery] = useState("");
   const [inputMethod, setInputMethod] = useState<"manual" | "qr">("manual");
   const [showScanner, setShowScanner] = useState(false);
-  const [loading, setLoading]         = useState(false);
-  const [errorMsg, setErrorMsg]       = useState("");
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
   const [foundParticipant, setFoundParticipant] = useState<FoundParticipant | null>(null);
 
   // ── Activity state ────────────────────────────────────────────────────────────
   // Activities already recorded (activity_log) or already ticketed (session_participations)
-  const [doneActivityIds, setDoneActivityIds]   = useState<Set<string>>(new Set());
+  const [doneActivityIds, setDoneActivityIds] = useState<Set<string>>(new Set());
   // Activities that have sessions configured
   const [sessionActivityIds, setSessionActivityIds] = useState<Set<string>>(new Set());
   // Which session-based activity to open picker for
-  const [sessionActivity, setSessionActivity]   = useState<Activity | null>(null);
+  const [sessionActivity, setSessionActivity] = useState<Activity | null>(null);
   // Session counter for this operator shift
-  const [sessionCount, setSessionCount]         = useState(0);
+  const [sessionCount, setSessionCount] = useState(0);
   // Direct-record flash feedback
-  const [flashId, setFlashId]                   = useState<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
 
   const { user } = useAuth();
   const { activeEvent } = useEvent();
@@ -266,7 +266,7 @@ export default function ActivityRecorder() {
           event_id: eventId,
         }));
       }
-      
+
       // Track time spent on activity (auto-checkout previous activity)
       await recordActivityCheckin(eventId, foundParticipant.id, activity.id);
     }
@@ -307,7 +307,7 @@ export default function ActivityRecorder() {
   };
 
   useEffect(() => {
-    if (findStatus === "not_found")      speak(VM.activity_not_found);
+    if (findStatus === "not_found") speak(VM.activity_not_found);
     if (findStatus === "not_checked_in") speak(VM.activity_not_checked_in);
   }, [findStatus]);
 
@@ -337,10 +337,10 @@ export default function ActivityRecorder() {
   const ActivityCard = ({ activity }: { activity: Activity }) => {
     const Icon = resolveIcon(activity.icon_name);
     const color = activity.color ?? "hsl(var(--primary))";
-    const isDone       = doneActivityIds.has(activity.id);
-    const isSingle     = activity.is_single_session === true; // Club 100
-    const hasSession   = sessionActivityIds.has(activity.id) && !isSingle;
-    const isFlashing   = flashId === activity.id;
+    const isDone = doneActivityIds.has(activity.id);
+    const isSingle = activity.is_single_session === true; // Club 100
+    const hasSession = sessionActivityIds.has(activity.id) && !isSingle;
+    const isFlashing = flashId === activity.id;
 
     const handleClick = () => {
       if (isDone) return;
@@ -402,7 +402,7 @@ export default function ActivityRecorder() {
         <div className="flex gap-2">
           {([
             { id: "recorder", label: "Record Activity", Icon: Zap },
-            { id: "validator", label: "QR Validator",   Icon: ScanLine },
+            { id: "validator", label: "QR Validator", Icon: ScanLine },
           ] as const).map(({ id, label, Icon }) => (
             <button
               key={id}
@@ -433,174 +433,174 @@ export default function ActivityRecorder() {
 
         {appTab === "recorder" && (<>
 
-        {/* ── Step 1: Search ────────────────────────────────────────────────── */}
-        {(step === "search" || findStatus !== "idle") && (
-          <div className="glass-card rounded-2xl p-6">
-            <h3 className="text-xs font-bold uppercase tracking-[2px] text-muted-foreground mb-4">
-              Step 1 — Identify Participant
-            </h3>
+          {/* ── Step 1: Search ────────────────────────────────────────────────── */}
+          {(step === "search" || findStatus !== "idle") && (
+            <div className="glass-card rounded-2xl p-6">
+              <h3 className="text-xs font-bold uppercase tracking-[2px] text-muted-foreground mb-4">
+                Step 1 — Identify Participant
+              </h3>
 
-            <div className="flex gap-2 mb-4">
-              {([
-                { id: "manual", label: "Search", Icon: Keyboard },
-                { id: "qr",     label: "Scan QR", Icon: QrCode  },
-              ] as const).map(({ id, label, Icon }) => (
-                <button
-                  key={id}
-                  onClick={() => setInputMethod(id)}
-                  className={cn(
-                    "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 text-sm font-bold transition-all",
-                    inputMethod === id
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-secondary text-muted-foreground hover:text-foreground"
+              <div className="flex gap-2 mb-4">
+                {([
+                  { id: "manual", label: "Search", Icon: Keyboard },
+                  { id: "qr", label: "Scan QR", Icon: QrCode },
+                ] as const).map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setInputMethod(id)}
+                    className={cn(
+                      "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 text-sm font-bold transition-all",
+                      inputMethod === id
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-secondary text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />{label}
+                  </button>
+                ))}
+              </div>
+
+              {inputMethod === "manual" ? (
+                <form onSubmit={handleManualSubmit} className="space-y-3">
+                  <Input
+                    value={query}
+                    onChange={e => setQuery(e.target.value)}
+                    placeholder="Code, name, or phone number"
+                    className="h-14 pl-4 pr-4 text-lg font-semibold bg-secondary border-2 focus:border-primary scan-pulse"
+                    autoFocus
+                    disabled={loading}
+                    autoComplete="off"
+                  />
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {[
+                      { icon: Hash, label: "Code", example: "0245" },
+                      { icon: User, label: "Name", example: "Daniel A." },
+                      { icon: Phone, label: "Phone", example: "08012345678" },
+                      { icon: QrCode, label: "QR URL", example: "gatheringng.com/…" },
+                    ].map(({ icon: Icon, label, example }) => (
+                      <div key={label} className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                        <Icon className="h-2.5 w-2.5 shrink-0" />
+                        <span className="font-semibold">{label}:</span>
+                        <span className="font-mono">{example}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <Button
+                    type="submit"
+                    disabled={loading || !query.trim()}
+                    className="w-full h-12 font-bold uppercase tracking-wider bg-primary text-primary-foreground shadow-glow-primary hover:bg-primary/90"
+                  >
+                    {loading
+                      ? <span className="flex items-center gap-2"><span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />Searching…</span>
+                      : <span className="flex items-center gap-2"><Zap className="h-4 w-4" />Find Participant</span>}
+                  </Button>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  {query && (
+                    <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-secondary border border-border">
+                      <span className="text-xs text-muted-foreground">Last scanned:</span>
+                      <span className="text-sm font-mono font-bold text-foreground truncate">{query}</span>
+                    </div>
                   )}
-                >
-                  <Icon className="h-4 w-4" />{label}
-                </button>
-              ))}
-            </div>
+                  <Button
+                    onClick={() => setShowScanner(true)}
+                    disabled={loading}
+                    className="w-full h-14 font-bold uppercase tracking-wider bg-primary text-primary-foreground shadow-glow-primary hover:bg-primary/90 gap-3"
+                  >
+                    <QrCode className="h-5 w-5" />
+                    {loading ? "Searching…" : "Open Camera Scanner"}
+                  </Button>
+                </div>
+              )}
 
-            {inputMethod === "manual" ? (
-              <form onSubmit={handleManualSubmit} className="space-y-3">
-                <Input
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  placeholder="Code, name, or phone number"
-                  className="h-14 pl-4 pr-4 text-lg font-semibold bg-secondary border-2 focus:border-primary scan-pulse"
-                  autoFocus
-                  disabled={loading}
-                  autoComplete="off"
-                />
-                <div className="flex items-center gap-2 flex-wrap">
-                  {[
-                    { icon: Hash,    label: "Code",  example: "0245" },
-                    { icon: User,    label: "Name",  example: "Daniel A." },
-                    { icon: Phone,   label: "Phone", example: "08012345678" },
-                    { icon: QrCode,  label: "QR URL", example: "gatheringng.com/…" },
-                  ].map(({ icon: Icon, label, example }) => (
-                    <div key={label} className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                      <Icon className="h-2.5 w-2.5 shrink-0" />
-                      <span className="font-semibold">{label}:</span>
-                      <span className="font-mono">{example}</span>
+              {findStatus === "not_found" && (
+                <div className="mt-4 flex items-start gap-3 rounded-xl bg-destructive/10 border border-destructive/20 px-4 py-3">
+                  <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-bold text-destructive">Not Found</p>
+                    <p className="text-xs text-muted-foreground">No participant found for "{query}"</p>
+                  </div>
+                </div>
+              )}
+              {findStatus === "not_checked_in" && foundParticipant && (
+                <div className="mt-4 space-y-2">
+                  <div className="flex items-start gap-3 rounded-xl bg-destructive/10 border border-destructive/20 px-4 py-3">
+                    <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-foreground truncate">{foundParticipant.name}</p>
+                      <p className="text-xs text-destructive font-medium">Not checked in — direct to Check-In Station first.</p>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm"
+                    onClick={() => navigate(`/communications?escalate=activity&participant=${encodeURIComponent(foundParticipant.name)}&error=${encodeURIComponent("Not checked in")}`)}
+                    className="w-full gap-2 border-destructive/30 text-destructive hover:bg-destructive/10">
+                    <MessageSquare className="h-3.5 w-3.5" />Escalate
+                  </Button>
+                </div>
+              )}
+              {findStatus === "error" && (
+                <div className="mt-4 flex items-start gap-3 rounded-xl bg-destructive/10 border border-destructive/20 px-4 py-3">
+                  <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+                  <p className="text-xs text-muted-foreground">{errorMsg}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Step 2: Select Activity ───────────────────────────────────────── */}
+          {step === "select" && foundParticipant && (
+            <div className="glass-card rounded-2xl p-6 fade-in-up space-y-5">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-[2px] text-muted-foreground mb-3">
+                  Step 2 — Select Activity
+                </h3>
+                <ParticipantCard />
+              </div>
+
+              {/* Legend */}
+              <div className="flex items-center gap-4 text-[10px] text-muted-foreground flex-wrap">
+                <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3 text-success" />Done</span>
+                <span className="flex items-center gap-1"><Ticket className="h-3 w-3 text-amber-500" />Tap to ticket</span>
+                <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-primary" />Direct record</span>
+              </div>
+
+              {activitiesLoading ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-24 rounded-xl bg-secondary animate-pulse" />)}
+                </div>
+              ) : activeActivities.length === 0 ? (
+                <p className="text-center text-sm text-muted-foreground py-6">No active activities. Ask an admin to create some.</p>
+              ) : (
+                <div className="space-y-4">
+                  {categories.map(cat => (
+                    <div key={cat}>
+                      {categories.length > 1 && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="flex-1 h-px bg-border" />
+                          <span className="text-[10px] font-black uppercase tracking-[3px] text-muted-foreground px-2">{cat}</span>
+                          <div className="flex-1 h-px bg-border" />
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {grouped[cat].map(a => <ActivityCard key={a.id} activity={a} />)}
+                      </div>
                     </div>
                   ))}
                 </div>
-                <Button
-                  type="submit"
-                  disabled={loading || !query.trim()}
-                  className="w-full h-12 font-bold uppercase tracking-wider bg-primary text-primary-foreground shadow-glow-primary hover:bg-primary/90"
-                >
-                  {loading
-                    ? <span className="flex items-center gap-2"><span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />Searching…</span>
-                    : <span className="flex items-center gap-2"><Zap className="h-4 w-4" />Find Participant</span>}
-                </Button>
-              </form>
-            ) : (
-              <div className="space-y-4">
-                {query && (
-                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-secondary border border-border">
-                    <span className="text-xs text-muted-foreground">Last scanned:</span>
-                    <span className="text-sm font-mono font-bold text-foreground truncate">{query}</span>
-                  </div>
-                )}
-                <Button
-                  onClick={() => setShowScanner(true)}
-                  disabled={loading}
-                  className="w-full h-14 font-bold uppercase tracking-wider bg-primary text-primary-foreground shadow-glow-primary hover:bg-primary/90 gap-3"
-                >
-                  <QrCode className="h-5 w-5" />
-                  {loading ? "Searching…" : "Open Camera Scanner"}
-                </Button>
-              </div>
-            )}
+              )}
 
-            {findStatus === "not_found" && (
-              <div className="mt-4 flex items-start gap-3 rounded-xl bg-destructive/10 border border-destructive/20 px-4 py-3">
-                <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-bold text-destructive">Not Found</p>
-                  <p className="text-xs text-muted-foreground">No participant found for "{query}"</p>
-                </div>
-              </div>
-            )}
-            {findStatus === "not_checked_in" && foundParticipant && (
-              <div className="mt-4 space-y-2">
-                <div className="flex items-start gap-3 rounded-xl bg-destructive/10 border border-destructive/20 px-4 py-3">
-                  <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-foreground truncate">{foundParticipant.name}</p>
-                    <p className="text-xs text-destructive font-medium">Not checked in — direct to Check-In Station first.</p>
-                  </div>
-                </div>
-                <Button variant="outline" size="sm"
-                  onClick={() => navigate(`/communications?escalate=activity&participant=${encodeURIComponent(foundParticipant.name)}&error=${encodeURIComponent("Not checked in")}`)}
-                  className="w-full gap-2 border-destructive/30 text-destructive hover:bg-destructive/10">
-                  <MessageSquare className="h-3.5 w-3.5" />Escalate
-                </Button>
-              </div>
-            )}
-            {findStatus === "error" && (
-              <div className="mt-4 flex items-start gap-3 rounded-xl bg-destructive/10 border border-destructive/20 px-4 py-3">
-                <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-                <p className="text-xs text-muted-foreground">{errorMsg}</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Step 2: Select Activity ───────────────────────────────────────── */}
-        {step === "select" && foundParticipant && (
-          <div className="glass-card rounded-2xl p-6 fade-in-up space-y-5">
-            <div>
-              <h3 className="text-xs font-bold uppercase tracking-[2px] text-muted-foreground mb-3">
-                Step 2 — Select Activity
-              </h3>
-              <ParticipantCard />
+              <Button variant="outline" onClick={resetToSearch} className="w-full gap-2">
+                <RotateCcw className="h-4 w-4" />Next Participant
+              </Button>
             </div>
+          )}
 
-            {/* Legend */}
-            <div className="flex items-center gap-4 text-[10px] text-muted-foreground flex-wrap">
-              <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3 text-success" />Done</span>
-              <span className="flex items-center gap-1"><Ticket className="h-3 w-3 text-amber-500" />Tap to ticket</span>
-              <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-primary" />Direct record</span>
-            </div>
-
-            {activitiesLoading ? (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-24 rounded-xl bg-secondary animate-pulse" />)}
-              </div>
-            ) : activeActivities.length === 0 ? (
-              <p className="text-center text-sm text-muted-foreground py-6">No active activities. Ask an admin to create some.</p>
-            ) : (
-              <div className="space-y-4">
-                {categories.map(cat => (
-                  <div key={cat}>
-                    {categories.length > 1 && (
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="flex-1 h-px bg-border" />
-                        <span className="text-[10px] font-black uppercase tracking-[3px] text-muted-foreground px-2">{cat}</span>
-                        <div className="flex-1 h-px bg-border" />
-                      </div>
-                    )}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {grouped[cat].map(a => <ActivityCard key={a.id} activity={a} />)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <Button variant="outline" onClick={resetToSearch} className="w-full gap-2">
-              <RotateCcw className="h-4 w-4" />Next Participant
-            </Button>
+          {/* ── Session counter ───────────────────────────────────────────────── */}
+          <div className="glass-card rounded-xl px-6 py-4 flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-[2px] text-muted-foreground">This Session</span>
+            <span className="text-lg font-black text-primary">{sessionCount} recorded</span>
           </div>
-        )}
-
-        {/* ── Session counter ───────────────────────────────────────────────── */}
-        <div className="glass-card rounded-xl px-6 py-4 flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-[2px] text-muted-foreground">This Session</span>
-          <span className="text-lg font-black text-primary">{sessionCount} recorded</span>
-        </div>
 
         </>)}
       </div>

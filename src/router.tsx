@@ -10,23 +10,24 @@ import NotFound from "./pages/NotFound";
 import LiveIndex from "./pages/LiveIndex";
 import LiveEvent from "./pages/LiveEvent";
 import DisplayMode from "./pages/DisplayMode";
+import EventJoin from "./pages/EventJoin";
 
 // ── Lazy pages — each loaded only when first navigated to ─────────────────────
-const Dashboard         = lazy(() => import("./pages/Dashboard"));
-const CheckIn           = lazy(() => import("./pages/CheckIn"));
-const ActivityRecorder  = lazy(() => import("./pages/ActivityRecorder"));
-const Activities        = lazy(() => import("./pages/Activities"));
-const Participants      = lazy(() => import("./pages/Participants"));
-const ServiceProviders  = lazy(() => import("./pages/ServiceProviders"));
-const CrewMembers       = lazy(() => import("./pages/CrewMembers"));
-const Leaderboard       = lazy(() => import("./pages/Leaderboard"));
-const ImportParticipants    = lazy(() => import("./pages/ImportParticipants"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const CheckIn = lazy(() => import("./pages/CheckIn"));
+const ActivityRecorder = lazy(() => import("./pages/ActivityRecorder"));
+const Activities = lazy(() => import("./pages/Activities"));
+const Participants = lazy(() => import("./pages/Participants"));
+const ServiceProviders = lazy(() => import("./pages/ServiceProviders"));
+const CrewMembers = lazy(() => import("./pages/CrewMembers"));
+const Leaderboard = lazy(() => import("./pages/Leaderboard"));
+const ImportParticipants = lazy(() => import("./pages/ImportParticipants"));
 const ImportServiceProviders = lazy(() => import("./pages/ImportServiceProviders"));
-const ImportCrew        = lazy(() => import("./pages/ImportCrew"));
-const StaffManagement   = lazy(() => import("./pages/StaffManagement"));
-const Events            = lazy(() => import("./pages/Events"));
-const Communications    = lazy(() => import("./pages/Communications"));
-const SystemHealth      = lazy(() => import("./pages/SystemHealth"));
+const ImportCrew = lazy(() => import("./pages/ImportCrew"));
+const StaffManagement = lazy(() => import("./pages/StaffManagement"));
+const Events = lazy(() => import("./pages/Events"));
+const Communications = lazy(() => import("./pages/Communications"));
+const SystemHealth = lazy(() => import("./pages/SystemHealth"));
 const ActivityTimeAnalytics = lazy(() => import("./pages/ActivityTimeAnalytics"));
 
 // ── Suspense wrapper helper ────────────────────────────────────────────────────
@@ -36,13 +37,14 @@ function Lazy({ children }: { children: React.ReactNode }) {
 
 export const routers = [
   { path: "/", name: "home", element: <Navigate to="/dashboard" replace /> },
-  { path: "/login",   name: "login",   element: <Login /> },
-  { path: "/setup",   name: "setup",   element: <Setup /> },
+  { path: "/login", name: "login", element: <Login /> },
+  { path: "/setup", name: "setup", element: <Setup /> },
 
   // ── Public live pages (no auth) ─────────────────────────────────────────────
-  { path: "/live",       name: "live-index", element: <LiveIndex /> },
+  { path: "/live", name: "live-index", element: <LiveIndex /> },
   { path: "/live/:slug", name: "live-event", element: <LiveEvent /> },
-  { path: "/display",    name: "display",    element: <DisplayMode /> },
+  { path: "/display", name: "display", element: <DisplayMode /> },
+  { path: "/event/:eventId/join/:token", name: "event-join", element: <EventJoin /> },
 
   // ── Protected + lazy ────────────────────────────────────────────────────────
   {

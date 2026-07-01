@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useEvent, SoulEvent } from "@/contexts/EventContext";
 import { Input } from "@/components/ui/input";
+import { EventAccessTokenManager } from "@/components/EventAccessTokenManager";
 import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -442,6 +443,7 @@ export default function Events() {
                       className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
+                    <EventAccessTokenManager eventId={event.id} eventName={event.name} />
                     {!isActive && (
                       <Button
                         size="sm"
