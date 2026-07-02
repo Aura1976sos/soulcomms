@@ -98,10 +98,10 @@ Deno.serve(async (req) => {
       }
 
       const updates: Record<string, unknown> = {};
-      if (name !== undefined)              updates.name = name;
-      if (phone !== undefined)             updates.phone = phone || null;
-      if (role !== undefined)              updates.role = role;
-      if (status !== undefined)            updates.status = status;
+      if (name !== undefined) updates.name = name;
+      if (phone !== undefined) updates.phone = phone || null;
+      if (role !== undefined) updates.role = role;
+      if (status !== undefined) updates.status = status;
       if (assigned_event_id !== undefined) updates.assigned_event_id = assigned_event_id || null;
 
       const { error: upErr } = await supabaseAdmin.from("staff_profiles").update(updates).eq("id", userId);
@@ -187,13 +187,58 @@ Deno.serve(async (req) => {
 
     // ── delete ────────────────────────────────────────────────────────────────
     if (action === "delete") {
+      if (!userId) {
+        return new Response(JSON.stringify({ error: "Missing userId" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (userId === callerId) {
+        return new Response(JSON.stringify({ error: "You cannot delete your own account" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       await supabaseAdmin.from("staff_audit_logs").insert({
         staff_id: callerProfile.id, staff_name: callerProfile.name,
         action: "account_deleted", details: { target_user_id: userId, target_name: payload.name },
       });
+
       const { error: delErr } = await supabaseAdmin.auth.admin.deleteUser(userId);
-      if (delErr) throw new Error(delErr.message);
-      return new Response(JSON.stringify({ success: true }), {
+      if (!delErr) {
+        return new Response(JSON.stringify({ success: true, mode: "hard_deleted" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // FK/history may prevent hard delete (messages, sessions, audit, etc.).
+      // Fall back to archive mode: disable + unassign event + force logout.
+      await supabaseAdmin.auth.admin.updateUserById(userId, { ban_duration: "876600h" });
+      await supabaseAdmin.auth.admin.signOut(userId, "global");
+      await supabaseAdmin
+        .from("staff_profiles")
+        .update({ status: "disabled", assigned_event_id: null, last_seen_at: null })
+        .eq("id", userId);
+
+      await supabaseAdmin.from("staff_audit_logs").insert({
+        staff_id: callerProfile.id,
+        staff_name: callerProfile.name,
+        action: "account_disabled",
+        details: {
+          target_user_id: userId,
+          target_name: payload.name,
+          fallback: "soft_deleted",
+          reason: delErr.message,
+        },
+      });
+
+      return new Response(JSON.stringify({
+        success: true,
+        mode: "soft_deleted",
+        warning: "Account could not be hard-deleted due to existing records. It has been disabled and unassigned.",
+      }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

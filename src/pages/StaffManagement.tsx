@@ -61,18 +61,18 @@ const isOnline = (s: StaffMember) => {
 };
 
 const ACTION_LABELS: Record<string, { label: string; color: string }> = {
-  account_created:    { label: "Account Created",    color: "text-success" },
-  account_changed:    { label: "Profile Updated",    color: "text-primary" },
-  account_disabled:   { label: "Account Disabled",   color: "text-destructive" },
-  account_enabled:    { label: "Account Enabled",    color: "text-success" },
-  account_suspended:  { label: "Account Suspended",  color: "text-amber-400" },
-  account_deleted:    { label: "Account Deleted",    color: "text-destructive" },
-  force_logout:       { label: "Force Logout",       color: "text-amber-400" },
-  force_logout_all:   { label: "Logout All Users",   color: "text-destructive" },
-  login:              { label: "Login",              color: "text-muted-foreground" },
-  logout:             { label: "Logout",             color: "text-muted-foreground" },
-  checkin_recorded:   { label: "Check-In Recorded",  color: "text-muted-foreground" },
-  activity_recorded:  { label: "Activity Recorded",  color: "text-muted-foreground" },
+  account_created: { label: "Account Created", color: "text-success" },
+  account_changed: { label: "Profile Updated", color: "text-primary" },
+  account_disabled: { label: "Account Disabled", color: "text-destructive" },
+  account_enabled: { label: "Account Enabled", color: "text-success" },
+  account_suspended: { label: "Account Suspended", color: "text-amber-400" },
+  account_deleted: { label: "Account Deleted", color: "text-destructive" },
+  force_logout: { label: "Force Logout", color: "text-amber-400" },
+  force_logout_all: { label: "Logout All Users", color: "text-destructive" },
+  login: { label: "Login", color: "text-muted-foreground" },
+  logout: { label: "Logout", color: "text-muted-foreground" },
+  checkin_recorded: { label: "Check-In Recorded", color: "text-muted-foreground" },
+  activity_recorded: { label: "Activity Recorded", color: "text-muted-foreground" },
 };
 
 type Tab = "directory" | "sessions" | "create" | "audit";
@@ -224,9 +224,17 @@ export default function StaffManagement() {
   };
 
   const handleDelete = async (s: StaffMember) => {
-    await callManage("delete", s.id, { name: s.name }).catch(() => null);
+    const res = await callManage("delete", s.id, { name: s.name }).catch(() => null);
+    if (!res?.success) return;
     await fetchStaff();
-    toast({ title: `${s.name ?? s.email} deleted` });
+    if (res.mode === "soft_deleted") {
+      toast({
+        title: `${s.name ?? s.email} archived`,
+        description: "Hard delete was blocked by historical records. Account has been disabled and unassigned.",
+      });
+    } else {
+      toast({ title: `${s.name ?? s.email} deleted` });
+    }
     setDeleteTarget(null);
   };
 
@@ -292,10 +300,10 @@ export default function StaffManagement() {
   };
 
   const TABS: { id: Tab; label: string; icon: typeof Users; count?: number }[] = [
-    { id: "directory", label: "Directory",     icon: Users,      count: staff.length },
-    { id: "sessions",  label: "Active Now",    icon: Wifi,       count: onlineStaff.length },
-    { id: "create",    label: "Create Staff",  icon: UserPlus },
-    { id: "audit",     label: "Audit Log",     icon: History },
+    { id: "directory", label: "Directory", icon: Users, count: staff.length },
+    { id: "sessions", label: "Active Now", icon: Wifi, count: onlineStaff.length },
+    { id: "create", label: "Create Staff", icon: UserPlus },
+    { id: "audit", label: "Audit Log", icon: History },
   ];
 
   return (
