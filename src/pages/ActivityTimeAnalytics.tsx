@@ -66,6 +66,12 @@ type ParticipationRow = {
     duration_minutes: number | null;
 };
 
+type ActivityLogRow = {
+    participant_id: string | null;
+    activity_id: string | null;
+    recorded_at: string | null;
+};
+
 export default function ActivityTimeAnalytics() {
     const { user } = useAuth();
     const { activeEvent } = useEvent();
@@ -84,13 +90,14 @@ export default function ActivityTimeAnalytics() {
     const [participantRows, setParticipantRows] = useState<ParticipantRow[]>([]);
     const [activityRows, setActivityRows] = useState<ActivityRow[]>([]);
     const [participationRows, setParticipationRows] = useState<ParticipationRow[]>([]);
+    const [activityLogRows, setActivityLogRows] = useState<ActivityLogRow[]>([]);
 
     const hasActiveRows = participationRows.some((row) => row.checkout_time == null);
 
-    const withTimeout = async <T,>(promise: Promise<T>, timeoutMs = 12000): Promise<T> => {
-        return await new Promise<T>((resolve, reject) => {
+    const withTimeout = async (promise: PromiseLike<any> | any, timeoutMs = 12000): Promise<any> => {
+        return await new Promise<any>((resolve, reject) => {
             const timeoutId = setTimeout(() => {
-                reject(new Error("Analytics request timed out. Please retry."));
+                reject(new Error("Request timed out"));
             }, timeoutMs);
 
             promise
@@ -130,6 +137,16 @@ export default function ActivityTimeAnalytics() {
         const rebuild = () => {
             const activityMap = new Map<string, string>();
             activityRows.forEach((activity) => activityMap.set(activity.id, activity.name));
+            const participationKeySet = new Set(participationRows.map((row) => `${row.participant_id}:${row.activity_id}`));
+            const fallbackLogMap = new Map<string, ActivityLogRow>();
+            activityLogRows.forEach((row) => {
+                if (!row.participant_id || !row.activity_id || !row.recorded_at) return;
+                const key = `${row.participant_id}:${row.activity_id}`;
+                const existing = fallbackLogMap.get(key);
+                if (!existing || new Date(row.recorded_at).getTime() > new Date(existing.recorded_at ?? 0).getTime()) {
+                    fallbackLogMap.set(key, row);
+                }
+            });
 
             const types = new Set<string>();
             const processedParticipants: ParticipantData[] = [];
@@ -140,6 +157,9 @@ export default function ActivityTimeAnalytics() {
                 }
 
                 const participations = participationRows.filter((row) => row.participant_id === participant.id);
+                const fallbackLogs = Array.from(fallbackLogMap.values()).filter(
+                    (row) => row.participant_id === participant.id && !participationKeySet.has(`${row.participant_id}:${row.activity_id}`)
+                );
                 const activityActivityMap = new Map<string, { name: string; minutes: number; count: number; isActive: boolean; lastCheckin?: string }>();
 
                 participations.forEach((participation) => {
@@ -166,6 +186,27 @@ export default function ActivityTimeAnalytics() {
                         : Math.max(0, Math.round((checkoutTime - checkinTime) / 60000));
                     data.minutes += minutes;
                     if (!participation.checkout_time) data.isActive = true;
+                });
+
+                fallbackLogs.forEach((log) => {
+                    if (!log.activity_id || !log.recorded_at) return;
+                    const activityName = activityMap.get(log.activity_id) || `Activity ${log.activity_id}`;
+                    if (!activityActivityMap.has(log.activity_id)) {
+                        activityActivityMap.set(log.activity_id, {
+                            name: activityName,
+                            minutes: 0,
+                            count: 0,
+                            isActive: true,
+                            lastCheckin: log.recorded_at,
+                        });
+                    }
+
+                    const data = activityActivityMap.get(log.activity_id)!;
+                    data.count += 1;
+                    data.isActive = true;
+                    data.lastCheckin = log.recorded_at;
+                    const checkinTime = new Date(log.recorded_at).getTime();
+                    data.minutes += Math.max(0, Math.round((nowTick - checkinTime) / 60000));
                 });
 
                 const activitiesList = Array.from(activityActivityMap.entries()).map(([_, data]) => ({
@@ -236,7 +277,7 @@ export default function ActivityTimeAnalytics() {
         };
 
         rebuild();
-    }, [participantRows, activityRows, participationRows, nowTick]);
+    }, [participantRows, activityRows, participationRows, activityLogRows, nowTick]);
 
     const fetchData = async () => {
         if (!eventId) {
@@ -258,7 +299,7 @@ export default function ActivityTimeAnalytics() {
 
             // Fetch simple participant data
             const { data: participantData, error: participantError } = await withTimeout(
-                supabase
+                (supabase as any)
                     .from("participants")
                     .select("id, name, code, source")
                     .eq("event_id", eventId)
@@ -268,7 +309,7 @@ export default function ActivityTimeAnalytics() {
 
             // Fetch all activity participation records
             const { data: allParticipationsRaw, error: participationError } = await withTimeout(
-                supabase
+                (supabase as any)
                     .from("activity_participation_time")
                     .select("id, event_id, participant_id, activity_id, checkin_time, checkout_time, duration_minutes")
                     .eq("event_id", eventId)
@@ -280,7 +321,7 @@ export default function ActivityTimeAnalytics() {
 
             // Fetch activities to get names
             const { data: activitiesData, error: activitiesError } = await withTimeout(
-                supabase
+                (supabase as any)
                     .from("activities")
                     .select("id, name")
                     .eq("event_id", eventId)
@@ -288,9 +329,19 @@ export default function ActivityTimeAnalytics() {
 
             if (activitiesError) throw activitiesError;
 
+            const { data: activityLogsData, error: activityLogsError } = await withTimeout(
+                (supabase as any)
+                    .from("activity_logs")
+                    .select("participant_id, activity_id, recorded_at")
+                    .eq("event_id", eventId)
+            );
+
+            if (activityLogsError) throw activityLogsError;
+
             setParticipantRows((participantData ?? []) as ParticipantRow[]);
             setActivityRows((activitiesData ?? []) as ActivityRow[]);
             setParticipationRows(allParticipations as ParticipationRow[]);
+            setActivityLogRows((activityLogsData ?? []) as ActivityLogRow[]);
         } catch (error) {
             console.error("Error fetching analytics data:", error);
             toast({
@@ -337,7 +388,7 @@ export default function ActivityTimeAnalytics() {
     };
 
     return (
-        <AppLayout>
+        <AppLayout title="Activity Time Analytics" subtitle="Monitor participant engagement and time spent across activities">
             <div className="space-y-6 p-6">
                 {/* Header */}
                 <div className="flex flex-col gap-4">
