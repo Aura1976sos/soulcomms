@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEvent } from "@/contexts/EventContext";
@@ -6,8 +6,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import { stopAllEventActivityTimers } from "@/lib/activityTimeTracking";
 import {
-    Clock, Users, TrendingUp, Activity, Search, Filter, Download,
+    Clock, Users, TrendingUp, Activity, Search, Filter, Download, ImageIcon, FileText, Table2,
     BarChart3, Award, Zap, Timer, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -27,10 +28,12 @@ interface ParticipantData {
     activities: Array<{
         activity_name: string;
         total_minutes: number;
+        total_seconds: number;
         checkin_count: number;
         is_currently_active?: boolean;
         last_checkin?: string;
     }>;
+    total_seconds: number;
     total_minutes: number;
 }
 
@@ -39,7 +42,8 @@ interface ActivityEngagementData {
     activity_name: string;
     total_participants: number;
     total_checkins: number;
-    average_duration_minutes: number;
+    average_duration_seconds: number;
+    total_time_seconds: number;
     total_time_minutes: number;
     total_time_hours: number;
 }
@@ -74,12 +78,16 @@ type ActivityLogRow = {
 
 export default function ActivityTimeAnalytics() {
     const { user } = useAuth();
-    const { activeEvent } = useEvent();
+    const { activeEvent, setActiveEvent } = useEvent();
     const { toast } = useToast();
     const eventId = activeEvent?.id ?? "";
+    const isEventClosed = activeEvent?.status === "completed";
+    const captureRef = useRef<HTMLDivElement>(null);
 
     const [view, setView] = useState<"participants" | "activities">("participants");
     const [loading, setLoading] = useState(true);
+    const [exporting, setExporting] = useState<"png" | "pdf" | "excel" | null>(null);
+    const [stoppingAll, setStoppingAll] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [participantTypeFilter, setParticipantTypeFilter] = useState<string>("all");
     const [participantTypes, setParticipantTypes] = useState<string[]>([]);
@@ -87,12 +95,11 @@ export default function ActivityTimeAnalytics() {
     const [participants, setParticipants] = useState<ParticipantData[]>([]);
     const [activities, setActivities] = useState<ActivityEngagementData[]>([]);
     const [nowTick, setNowTick] = useState(() => Date.now());
+    const [fetchedAtTick, setFetchedAtTick] = useState(() => Date.now());
     const [participantRows, setParticipantRows] = useState<ParticipantRow[]>([]);
     const [activityRows, setActivityRows] = useState<ActivityRow[]>([]);
     const [participationRows, setParticipationRows] = useState<ParticipationRow[]>([]);
     const [activityLogRows, setActivityLogRows] = useState<ActivityLogRow[]>([]);
-
-    const hasActiveRows = participationRows.some((row) => row.checkout_time == null);
 
     const withTimeout = async (promise: PromiseLike<any> | any, timeoutMs = 12000): Promise<any> => {
         return await new Promise<any>((resolve, reject) => {
@@ -137,16 +144,26 @@ export default function ActivityTimeAnalytics() {
         const rebuild = () => {
             const activityMap = new Map<string, string>();
             activityRows.forEach((activity) => activityMap.set(activity.id, activity.name));
-            const participationKeySet = new Set(participationRows.map((row) => `${row.participant_id}:${row.activity_id}`));
-            const fallbackLogMap = new Map<string, ActivityLogRow>();
+
+            const fallbackLogsByParticipant = new Map<string, ActivityLogRow[]>();
             activityLogRows.forEach((row) => {
                 if (!row.participant_id || !row.activity_id || !row.recorded_at) return;
-                const key = `${row.participant_id}:${row.activity_id}`;
-                const existing = fallbackLogMap.get(key);
-                if (!existing || new Date(row.recorded_at).getTime() > new Date(existing.recorded_at ?? 0).getTime()) {
-                    fallbackLogMap.set(key, row);
-                }
+                const rows = fallbackLogsByParticipant.get(row.participant_id) ?? [];
+                rows.push(row);
+                fallbackLogsByParticipant.set(row.participant_id, rows);
             });
+            const activeParticipantSet = new Set(
+                participationRows
+                    .filter((row) => row.checkout_time == null)
+                    .map((row) => row.participant_id)
+            );
+            const hasParticipationRows = participationRows.length > 0;
+            const effectiveActiveParticipantSet = isEventClosed ? new Set<string>() : activeParticipantSet;
+            const fallbackNowTick = isEventClosed
+                ? fetchedAtTick
+                : (hasParticipationRows
+                    ? (effectiveActiveParticipantSet.size > 0 ? nowTick : fetchedAtTick)
+                    : nowTick);
 
             const types = new Set<string>();
             const processedParticipants: ParticipantData[] = [];
@@ -157,75 +174,88 @@ export default function ActivityTimeAnalytics() {
                 }
 
                 const participations = participationRows.filter((row) => row.participant_id === participant.id);
-                const fallbackLogs = Array.from(fallbackLogMap.values()).filter(
-                    (row) => row.participant_id === participant.id && !participationKeySet.has(`${row.participant_id}:${row.activity_id}`)
-                );
-                const activityActivityMap = new Map<string, { name: string; minutes: number; count: number; isActive: boolean; lastCheckin?: string }>();
+                const activityActivityMap = new Map<string, { name: string; seconds: number; count: number; isActive: boolean; lastCheckin?: string }>();
 
-                participations.forEach((participation) => {
-                    const activityName = activityMap.get(participation.activity_id) || `Activity ${participation.activity_id}`;
+                if (participations.length > 0) {
+                    participations.forEach((participation) => {
+                        const activityName = activityMap.get(participation.activity_id) || `Activity ${participation.activity_id}`;
 
-                    if (!activityActivityMap.has(participation.activity_id)) {
-                        activityActivityMap.set(participation.activity_id, {
-                            name: activityName,
-                            minutes: 0,
-                            count: 0,
-                            isActive: false,
-                            lastCheckin: participation.checkin_time,
-                        });
-                    }
+                        if (!activityActivityMap.has(participation.activity_id)) {
+                            activityActivityMap.set(participation.activity_id, {
+                                name: activityName,
+                                seconds: 0,
+                                count: 0,
+                                isActive: false,
+                                lastCheckin: participation.checkin_time,
+                            });
+                        }
 
-                    const data = activityActivityMap.get(participation.activity_id)!;
-                    data.count += 1;
-                    data.lastCheckin = participation.checkin_time;
+                        const data = activityActivityMap.get(participation.activity_id)!;
+                        data.count += 1;
+                        data.lastCheckin = participation.checkin_time;
 
-                    const checkoutTime = participation.checkout_time ? new Date(participation.checkout_time).getTime() : nowTick;
-                    const checkinTime = new Date(participation.checkin_time).getTime();
-                    const minutes = participation.duration_minutes != null
-                        ? Math.max(0, Math.round(participation.duration_minutes))
-                        : Math.max(0, Math.round((checkoutTime - checkinTime) / 60000));
-                    data.minutes += minutes;
-                    if (!participation.checkout_time) data.isActive = true;
-                });
+                        const checkinTime = new Date(participation.checkin_time).getTime();
+                        const checkoutTime = participation.checkout_time
+                            ? new Date(participation.checkout_time).getTime()
+                            : (isEventClosed ? fetchedAtTick : nowTick);
+                        const seconds = Math.max(0, Math.round((checkoutTime - checkinTime) / 1000));
+                        data.seconds += seconds;
+                        if (!participation.checkout_time && !isEventClosed) data.isActive = true;
+                    });
+                } else {
+                    const logs = (fallbackLogsByParticipant.get(participant.id) ?? []).slice().sort(
+                        (a, b) => new Date(a.recorded_at!).getTime() - new Date(b.recorded_at!).getTime()
+                    );
 
-                fallbackLogs.forEach((log) => {
-                    if (!log.activity_id || !log.recorded_at) return;
-                    const activityName = activityMap.get(log.activity_id) || `Activity ${log.activity_id}`;
-                    if (!activityActivityMap.has(log.activity_id)) {
-                        activityActivityMap.set(log.activity_id, {
-                            name: activityName,
-                            minutes: 0,
-                            count: 0,
-                            isActive: true,
-                            lastCheckin: log.recorded_at,
-                        });
-                    }
+                    logs.forEach((log, index) => {
+                        if (!log.activity_id || !log.recorded_at) return;
+                        const activityName = activityMap.get(log.activity_id) || `Activity ${log.activity_id}`;
+                        const nextLog = logs[index + 1];
+                        const isTerminalActive = !nextLog
+                            && !isEventClosed
+                            && (!hasParticipationRows || effectiveActiveParticipantSet.has(participant.id));
+                        const checkinTime = new Date(log.recorded_at).getTime();
+                        const checkoutTime = nextLog?.recorded_at
+                            ? new Date(nextLog.recorded_at).getTime()
+                            : (isTerminalActive ? nowTick : fallbackNowTick);
 
-                    const data = activityActivityMap.get(log.activity_id)!;
-                    data.count += 1;
-                    data.isActive = true;
-                    data.lastCheckin = log.recorded_at;
-                    const checkinTime = new Date(log.recorded_at).getTime();
-                    data.minutes += Math.max(0, Math.round((nowTick - checkinTime) / 60000));
-                });
+                        if (!activityActivityMap.has(log.activity_id)) {
+                            activityActivityMap.set(log.activity_id, {
+                                name: activityName,
+                                seconds: 0,
+                                count: 0,
+                                isActive: false,
+                                lastCheckin: log.recorded_at,
+                            });
+                        }
+
+                        const data = activityActivityMap.get(log.activity_id)!;
+                        data.count += 1;
+                        data.lastCheckin = log.recorded_at;
+                        data.seconds += Math.max(0, Math.round((checkoutTime - checkinTime) / 1000));
+                        data.isActive = isTerminalActive;
+                    });
+                }
 
                 const activitiesList = Array.from(activityActivityMap.entries()).map(([_, data]) => ({
                     activity_name: data.name,
-                    total_minutes: data.minutes,
+                    total_minutes: Math.round(data.seconds / 60),
+                    total_seconds: data.seconds,
                     checkin_count: data.count,
                     is_currently_active: data.isActive,
                     last_checkin: data.lastCheckin,
                 }));
 
-                const totalMinutes = activitiesList.reduce((sum, a) => sum + a.total_minutes, 0);
+                const totalSeconds = activitiesList.reduce((sum, a) => sum + a.total_seconds, 0);
 
                 processedParticipants.push({
                     participant_id: participant.id,
                     participant_name: participant.name,
                     participant_code: participant.code || "N/A",
                     participant_type: participant.source || "General",
-                    activities: activitiesList.sort((a, b) => b.total_minutes - a.total_minutes),
-                    total_minutes: totalMinutes,
+                    activities: activitiesList.sort((a, b) => b.total_seconds - a.total_seconds),
+                    total_seconds: totalSeconds,
+                    total_minutes: Math.round(totalSeconds / 60),
                 });
             });
 
@@ -233,7 +263,7 @@ export default function ActivityTimeAnalytics() {
                 name: string;
                 participants: Set<string>;
                 checkins: number;
-                totalMinutes: number;
+                totalSeconds: number;
             }>();
 
             participationRows.forEach((record) => {
@@ -243,7 +273,7 @@ export default function ActivityTimeAnalytics() {
                         name: activityName,
                         participants: new Set(),
                         checkins: 0,
-                        totalMinutes: 0,
+                        totalSeconds: 0,
                     });
                 }
 
@@ -251,23 +281,42 @@ export default function ActivityTimeAnalytics() {
                 data.participants.add(record.participant_id);
                 data.checkins += 1;
                 const checkinTime = new Date(record.checkin_time).getTime();
-                const checkoutTime = record.checkout_time ? new Date(record.checkout_time).getTime() : nowTick;
-                const minutes = record.duration_minutes != null
-                    ? Math.max(0, Math.round(record.duration_minutes))
-                    : Math.max(0, Math.round((checkoutTime - checkinTime) / 60000));
-                data.totalMinutes += minutes;
+                const checkoutTime = record.checkout_time
+                    ? new Date(record.checkout_time).getTime()
+                    : (isEventClosed ? fetchedAtTick : nowTick);
+                data.totalSeconds += Math.max(0, Math.round((checkoutTime - checkinTime) / 1000));
             });
 
+            if (participationRows.length === 0) {
+                activityLogRows.forEach((log) => {
+                    if (!log.participant_id || !log.activity_id || !log.recorded_at) return;
+                    const activityName = activityMap.get(log.activity_id) || `Activity ${log.activity_id}`;
+                    if (!engagementMap.has(log.activity_id)) {
+                        engagementMap.set(log.activity_id, {
+                            name: activityName,
+                            participants: new Set(),
+                            checkins: 0,
+                            totalSeconds: 0,
+                        });
+                    }
+
+                    const data = engagementMap.get(log.activity_id)!;
+                    data.participants.add(log.participant_id);
+                    data.checkins += 1;
+                });
+            }
+
             const engagementList: ActivityEngagementData[] = Array.from(engagementMap.entries()).map(([activityId, data]) => {
-                const avgDuration = data.checkins > 0 ? Math.round(data.totalMinutes / data.checkins) : 0;
+                const avgDuration = data.checkins > 0 ? Math.round(data.totalSeconds / data.checkins) : 0;
                 return {
                     activity_id: activityId,
                     activity_name: data.name,
                     total_participants: data.participants.size,
                     total_checkins: data.checkins,
-                    average_duration_minutes: avgDuration,
-                    total_time_minutes: data.totalMinutes,
-                    total_time_hours: Math.round((data.totalMinutes / 60) * 100) / 100,
+                    average_duration_seconds: avgDuration,
+                    total_time_seconds: data.totalSeconds,
+                    total_time_minutes: Math.round(data.totalSeconds / 60),
+                    total_time_hours: Math.round((data.totalSeconds / 3600) * 100) / 100,
                 };
             });
 
@@ -277,7 +326,7 @@ export default function ActivityTimeAnalytics() {
         };
 
         rebuild();
-    }, [participantRows, activityRows, participationRows, activityLogRows, nowTick]);
+    }, [participantRows, activityRows, participationRows, activityLogRows, nowTick, fetchedAtTick, isEventClosed]);
 
     const fetchData = async () => {
         if (!eventId) {
@@ -342,6 +391,7 @@ export default function ActivityTimeAnalytics() {
             setActivityRows((activitiesData ?? []) as ActivityRow[]);
             setParticipationRows(allParticipations as ParticipationRow[]);
             setActivityLogRows((activityLogsData ?? []) as ActivityLogRow[]);
+            setFetchedAtTick(Date.now());
         } catch (error) {
             console.error("Error fetching analytics data:", error);
             toast({
@@ -364,20 +414,7 @@ export default function ActivityTimeAnalytics() {
         return matchesSearch && matchesType;
     });
 
-    const formatDuration = (minutes: number) => {
-        if (minutes < 60) return `${minutes}m`;
-        const hours = Math.floor(minutes / 60);
-        const mins = minutes % 60;
-        return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-    };
-
-    const formatLiveDuration = (checkinTime: string, checkoutTime?: string | null, durationMinutes?: number | null) => {
-        const start = new Date(checkinTime).getTime();
-        const end = checkoutTime ? new Date(checkoutTime).getTime() : nowTick;
-        const seconds = durationMinutes != null && checkoutTime
-            ? Math.max(0, Math.round(durationMinutes * 60))
-            : Math.max(0, Math.round((end - start) / 1000));
-
+    const formatDurationFromSeconds = (seconds: number) => {
         if (seconds < 60) return `${seconds}s`;
         const minutes = Math.floor(seconds / 60);
         const remainder = seconds % 60;
@@ -385,6 +422,202 @@ export default function ActivityTimeAnalytics() {
         const hours = Math.floor(minutes / 60);
         const mins = minutes % 60;
         return `${hours}h ${mins}m ${remainder}s`;
+    };
+
+    const formatLiveDuration = (baseSeconds: number) => {
+        return formatDurationFromSeconds(baseSeconds);
+    };
+
+    const safeFileBase = activeEvent?.name?.trim().replace(/[^a-z0-9]+/gi, "_") || "activity_time_analytics";
+
+    const handleExportPng = async () => {
+        if (!captureRef.current) return;
+        setExporting("png");
+        try {
+            const { default: html2canvas } = await import("html2canvas");
+            const canvas = await html2canvas(captureRef.current, {
+                backgroundColor: window.getComputedStyle(document.body).backgroundColor,
+                scale: 1.5,
+                useCORS: true,
+                logging: false,
+            });
+            const link = document.createElement("a");
+            link.href = canvas.toDataURL("image/png");
+            link.download = `${safeFileBase}_${view}.png`;
+            link.click();
+        } catch (error) {
+            toast({
+                title: "PNG export failed",
+                description: error instanceof Error ? error.message : "Could not export the current view.",
+                variant: "destructive",
+            });
+        } finally {
+            setExporting(null);
+        }
+    };
+
+    const handleExportPdf = async () => {
+        if (!captureRef.current) return;
+        setExporting("pdf");
+        try {
+            const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
+            const canvas = await html2canvas(captureRef.current, {
+                backgroundColor: window.getComputedStyle(document.body).backgroundColor,
+                scale: 1.5,
+                useCORS: true,
+                logging: false,
+            });
+            const imgData = canvas.toDataURL("image/png");
+            const pdf = new jsPDF({ orientation: "landscape", unit: "px", format: [canvas.width / 2, canvas.height / 2] });
+            pdf.addImage(imgData, "PNG", 0, 0, canvas.width / 2, canvas.height / 2);
+            pdf.save(`${safeFileBase}_${view}.pdf`);
+        } catch (error) {
+            toast({
+                title: "PDF export failed",
+                description: error instanceof Error ? error.message : "Could not export the current view.",
+                variant: "destructive",
+            });
+        } finally {
+            setExporting(null);
+        }
+    };
+
+    const handleExportExcel = async () => {
+        setExporting("excel");
+        try {
+            const XLSX = await import("xlsx");
+            const workbook = XLSX.utils.book_new();
+            const generatedAt = new Date().toLocaleString();
+
+            if (view === "participants") {
+                const summarySheet = XLSX.utils.json_to_sheet(
+                    filteredParticipants.map((participant) => ({
+                        Participant: participant.participant_name,
+                        Code: participant.participant_code,
+                        Type: participant.participant_type,
+                        "Total Time": formatDurationFromSeconds(participant.total_seconds),
+                        "Total Seconds": participant.total_seconds,
+                        "Activities Count": participant.activities.length,
+                    }))
+                );
+                XLSX.utils.book_append_sheet(workbook, summarySheet, "Participants");
+
+                const detailRows = filteredParticipants.flatMap((participant) =>
+                    participant.activities.map((activity) => ({
+                        Participant: participant.participant_name,
+                        Code: participant.participant_code,
+                        Type: participant.participant_type,
+                        Activity: activity.activity_name,
+                        Checkins: activity.checkin_count,
+                        Duration: formatDurationFromSeconds(activity.total_seconds),
+                        "Duration Seconds": activity.total_seconds,
+                        Status: activity.is_currently_active ? "In progress" : "Complete",
+                    }))
+                );
+                const detailSheet = XLSX.utils.json_to_sheet(detailRows.length > 0 ? detailRows : [{ Participant: "No data" }]);
+                XLSX.utils.book_append_sheet(workbook, detailSheet, "Participant Activities");
+            } else {
+                const summarySheet = XLSX.utils.json_to_sheet(
+                    activities.map((activity) => ({
+                        Activity: activity.activity_name,
+                        Participants: activity.total_participants,
+                        Checkins: activity.total_checkins,
+                        "Avg Duration": formatDurationFromSeconds(activity.average_duration_seconds),
+                        "Avg Duration Seconds": activity.average_duration_seconds,
+                        "Total Time": formatDurationFromSeconds(activity.total_time_seconds),
+                        "Total Seconds": activity.total_time_seconds,
+                    }))
+                );
+                XLSX.utils.book_append_sheet(workbook, summarySheet, "Activities");
+
+                const participantRows = filteredParticipants.flatMap((participant) =>
+                    participant.activities.map((activity) => ({
+                        Participant: participant.participant_name,
+                        Code: participant.participant_code,
+                        Type: participant.participant_type,
+                        Activity: activity.activity_name,
+                        Checkins: activity.checkin_count,
+                        Duration: formatDurationFromSeconds(activity.total_seconds),
+                        "Duration Seconds": activity.total_seconds,
+                    }))
+                );
+                const detailsSheet = XLSX.utils.json_to_sheet(participantRows.length > 0 ? participantRows : [{ Activity: "No data" }]);
+                XLSX.utils.book_append_sheet(workbook, detailsSheet, "Activity Details");
+            }
+
+            const metaSheet = XLSX.utils.json_to_sheet([
+                { Label: "Event", Value: activeEvent?.name || eventId || "N/A" },
+                { Label: "View", Value: view },
+                { Label: "Generated At", Value: generatedAt },
+            ]);
+            XLSX.utils.book_append_sheet(workbook, metaSheet, "Summary");
+            XLSX.writeFile(workbook, `${safeFileBase}_${view}.xlsx`);
+        } catch (error) {
+            toast({
+                title: "Excel export failed",
+                description: error instanceof Error ? error.message : "Could not export the current view.",
+                variant: "destructive",
+            });
+        } finally {
+            setExporting(null);
+        }
+    };
+
+    const handleCloseEvent = async () => {
+        if (!eventId || stoppingAll || isEventClosed) return;
+
+        const proceed = window.confirm(
+            "Close this event now? This will stop all active timers for this event and mark it as completed."
+        );
+        if (!proceed) return;
+
+        setStoppingAll(true);
+        try {
+            const stopTime = new Date();
+            const result = await stopAllEventActivityTimers(eventId, stopTime);
+
+            if (!result.success) {
+                toast({
+                    title: "Failed to stop timers",
+                    description: result.message || "Could not stop active timers.",
+                    variant: "destructive",
+                });
+                return;
+            }
+
+            const { error: eventUpdateError } = await (supabase as any)
+                .from("events")
+                .update({ status: "completed" })
+                .eq("id", eventId);
+
+            if (eventUpdateError) {
+                toast({
+                    title: "Event status update failed",
+                    description: eventUpdateError.message || "Timers were stopped, but event could not be marked completed.",
+                    variant: "destructive",
+                });
+            } else if (activeEvent) {
+                setActiveEvent({ ...activeEvent, status: "completed" });
+            }
+
+            toast({
+                title: "Event closed",
+                description: result.stoppedCount > 0
+                    ? `${result.stoppedCount} active timer${result.stoppedCount === 1 ? "" : "s"} stopped and this event is now completed.`
+                    : "This event is now completed. No active timers were open.",
+            });
+
+            await fetchData();
+            setNowTick(Date.now());
+        } catch (error) {
+            toast({
+                title: "Failed to close event",
+                description: error instanceof Error ? error.message : "Could not close this event.",
+                variant: "destructive",
+            });
+        } finally {
+            setStoppingAll(false);
+        }
     };
 
     return (
@@ -401,6 +634,11 @@ export default function ActivityTimeAnalytics() {
                             <p className="text-sm text-muted-foreground">
                                 Monitor participant engagement and time spent across activities
                             </p>
+                            {isEventClosed && (
+                                <p className="mt-1 inline-flex rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-600">
+                                    Event Closed
+                                </p>
+                            )}
                         </div>
                     </div>
 
@@ -426,6 +664,27 @@ export default function ActivityTimeAnalytics() {
                             <Download className="h-4 w-4" />
                             Refresh
                         </Button>
+                        <Button
+                            variant="destructive"
+                            className="gap-2"
+                            onClick={handleCloseEvent}
+                            disabled={stoppingAll || loading || !eventId || isEventClosed}
+                        >
+                            <Clock className="h-4 w-4" />
+                            {isEventClosed ? "Event Closed" : (stoppingAll ? "Closing Event..." : "Close Event")}
+                        </Button>
+                        <Button variant="outline" className="gap-2" onClick={handleExportPng} disabled={exporting !== null}>
+                            <ImageIcon className="h-4 w-4" />
+                            PNG
+                        </Button>
+                        <Button variant="outline" className="gap-2" onClick={handleExportPdf} disabled={exporting !== null}>
+                            <FileText className="h-4 w-4" />
+                            PDF
+                        </Button>
+                        <Button variant="outline" className="gap-2" onClick={handleExportExcel} disabled={exporting !== null}>
+                            <Table2 className="h-4 w-4" />
+                            Excel
+                        </Button>
                     </div>
                 </div>
 
@@ -441,21 +700,25 @@ export default function ActivityTimeAnalytics() {
                         Select an active event to view time analytics.
                     </div>
                 ) : view === "participants" ? (
-                    <ParticipantBreakdownView
-                        participants={filteredParticipants}
-                        types={participantTypes}
-                        searchQuery={searchQuery}
-                        participantTypeFilter={participantTypeFilter}
-                        onSearchChange={setSearchQuery}
-                        onTypeFilterChange={setParticipantTypeFilter}
-                        formatDuration={formatDuration}
-                        formatLiveDuration={formatLiveDuration}
-                    />
+                    <div ref={captureRef}>
+                        <ParticipantBreakdownView
+                            participants={filteredParticipants}
+                            types={participantTypes}
+                            searchQuery={searchQuery}
+                            participantTypeFilter={participantTypeFilter}
+                            onSearchChange={setSearchQuery}
+                            onTypeFilterChange={setParticipantTypeFilter}
+                            formatDurationFromSeconds={formatDurationFromSeconds}
+                            formatLiveDuration={formatLiveDuration}
+                        />
+                    </div>
                 ) : (
-                    <ActivityEngagementView
-                        activities={activities}
-                        formatDuration={formatDuration}
-                    />
+                    <div ref={captureRef}>
+                        <ActivityEngagementView
+                            activities={activities}
+                            formatDurationFromSeconds={formatDurationFromSeconds}
+                        />
+                    </div>
                 )}
             </div>
         </AppLayout>
@@ -469,8 +732,8 @@ interface ParticipantBreakdownViewProps {
     participantTypeFilter: string;
     onSearchChange: (query: string) => void;
     onTypeFilterChange: (type: string) => void;
-    formatDuration: (minutes: number) => string;
-    formatLiveDuration: (checkinTime: string, checkoutTime?: string | null, durationMinutes?: number | null) => string;
+    formatDurationFromSeconds: (seconds: number) => string;
+    formatLiveDuration: (baseSeconds: number) => string;
 }
 
 function ParticipantBreakdownView({
@@ -480,7 +743,7 @@ function ParticipantBreakdownView({
     participantTypeFilter,
     onSearchChange,
     onTypeFilterChange,
-    formatDuration,
+    formatDurationFromSeconds,
     formatLiveDuration,
 }: ParticipantBreakdownViewProps) {
     return (
@@ -537,7 +800,7 @@ function ParticipantBreakdownView({
                                 </div>
                                 <div className="text-right">
                                     <p className="text-lg font-bold text-primary">
-                                        {formatDuration(participant.total_minutes)}
+                                        {formatDurationFromSeconds(participant.total_seconds)}
                                     </p>
                                     <p className="text-xs text-muted-foreground">Total Time</p>
                                 </div>
@@ -559,8 +822,8 @@ function ParticipantBreakdownView({
                                                 <div className="text-right">
                                                     <p className="text-xs font-semibold text-foreground">
                                                         {activity.is_currently_active && activity.last_checkin
-                                                            ? formatLiveDuration(activity.last_checkin, null, activity.total_minutes)
-                                                            : formatDuration(activity.total_minutes)}
+                                                            ? formatLiveDuration(activity.total_seconds)
+                                                            : formatDurationFromSeconds(activity.total_seconds)}
                                                     </p>
                                                     <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
                                                         <span>{activity.checkin_count}x</span>
@@ -596,12 +859,12 @@ function ParticipantBreakdownView({
                     label="Avg Time/Person"
                     value={
                         participants.length > 0
-                            ? formatDuration(
+                            ? formatDurationFromSeconds(
                                 Math.round(
-                                    participants.reduce((sum, p) => sum + p.total_minutes, 0) / participants.length
+                                    participants.reduce((sum, p) => sum + p.total_seconds, 0) / participants.length
                                 )
                             )
-                            : "0m"
+                            : "0s"
                     }
                     color="blue"
                 />
@@ -610,8 +873,8 @@ function ParticipantBreakdownView({
                     label="Max Time/Person"
                     value={
                         participants.length > 0
-                            ? formatDuration(Math.max(...participants.map((p) => p.total_minutes)))
-                            : "0m"
+                            ? formatDurationFromSeconds(Math.max(...participants.map((p) => p.total_seconds)))
+                            : "0s"
                     }
                     color="amber"
                 />
@@ -619,7 +882,7 @@ function ParticipantBreakdownView({
                     icon={TrendingUp}
                     label="Total Hours"
                     value={Math.round(
-                        (participants.reduce((sum, p) => sum + p.total_minutes, 0) / 60) * 100
+                        (participants.reduce((sum, p) => sum + p.total_seconds, 0) / 3600) * 100
                     ) / 100}
                     color="green"
                 />
@@ -630,12 +893,12 @@ function ParticipantBreakdownView({
 
 interface ActivityEngagementViewProps {
     activities: ActivityEngagementData[];
-    formatDuration: (minutes: number) => string;
+    formatDurationFromSeconds: (seconds: number) => string;
 }
 
 function ActivityEngagementView({
     activities,
-    formatDuration,
+    formatDurationFromSeconds,
 }: ActivityEngagementViewProps) {
     return (
         <div className="space-y-4">
@@ -664,7 +927,7 @@ function ActivityEngagementView({
                                     </div>
                                 </div>
                                 <div className="text-right">
-                                    <p className="text-lg font-bold text-primary">{activity.total_time_hours}h</p>
+                                    <p className="text-lg font-bold text-primary">{formatDurationFromSeconds(activity.total_time_seconds)}</p>
                                     <p className="text-xs text-muted-foreground">Total Time</p>
                                 </div>
                             </div>
@@ -684,7 +947,10 @@ function ActivityEngagementView({
                                 <div className="p-3 rounded-lg bg-secondary/50">
                                     <p className="text-xs text-muted-foreground mb-1">Avg Duration</p>
                                     <p className="text-xl font-bold text-foreground">
-                                        {formatDuration(activity.average_duration_minutes)}
+                                        {formatDurationFromSeconds(activity.average_duration_seconds)}
+                                    </p>
+                                    <p className="text-[10px] text-muted-foreground mt-1">
+                                        Based on {activity.total_checkins} checkins
                                     </p>
                                 </div>
                                 <div className="p-3 rounded-lg bg-secondary/50">
@@ -735,7 +1001,7 @@ function ActivityEngagementView({
                 <StatCard
                     icon={Clock}
                     label="Total Hours"
-                    value={Math.round(activities.reduce((sum, a) => sum + a.total_time_hours, 0) * 100) / 100}
+                    value={Math.round((activities.reduce((sum, a) => sum + a.total_time_seconds, 0) / 3600) * 100) / 100}
                     color="green"
                 />
             </div>

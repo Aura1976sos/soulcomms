@@ -203,6 +203,53 @@ export async function getActiveParticipations(
 }
 
 /**
+ * Stop all currently active activity timers for a single event
+ */
+export async function stopAllEventActivityTimers(
+    eventId: string,
+    checkoutTime?: Date
+) {
+    const stopIso = checkoutTime?.toISOString() || new Date().toISOString();
+    try {
+        const { data, error } = await supabase.rpc('stop_all_event_activity_timers', {
+            p_event_id: eventId,
+            p_checkout_time: stopIso,
+        });
+
+        if (error) {
+            // Fallback for environments where the RPC migration hasn't been applied yet.
+            const { data: updatedRows, error: fallbackError } = await supabase
+                .from('activity_participation_time')
+                .update({ checkout_time: stopIso, updated_at: new Date().toISOString() })
+                .eq('event_id', eventId)
+                .is('checkout_time', null)
+                .select('id');
+
+            if (fallbackError) throw fallbackError;
+
+            return {
+                success: true,
+                stoppedCount: updatedRows?.length ?? 0,
+                message: 'Stopped active timers for selected event',
+            };
+        }
+
+        return {
+            success: data?.[0]?.success ?? false,
+            stoppedCount: data?.[0]?.stopped_count ?? 0,
+            message: data?.[0]?.message ?? 'Unknown response',
+        };
+    } catch (err) {
+        console.error('Error stopping all event activity timers:', err);
+        return {
+            success: false,
+            stoppedCount: 0,
+            message: err instanceof Error ? err.message : 'Unknown error',
+        };
+    }
+}
+
+/**
  * Format duration in minutes to readable string
  */
 export function formatDuration(minutes: number): string {

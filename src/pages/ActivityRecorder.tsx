@@ -442,6 +442,11 @@ export default function ActivityRecorder() {
   const directRecord = useCallback(async (activity: Activity, session?: ActivitySessionDisplay) => {
     const recordKey = session ? `session:${session.id}` : `activity:${activity.id}`;
     if (!foundParticipant || doneActivityIds.has(recordKey) || recordingActivityId) return;
+    if (!isGuestMode && activeEvent?.status === "completed") {
+      setErrorMsg("This event is closed. Activity timing is no longer accepting new records.");
+      setFindStatus("error");
+      return;
+    }
     const now = new Date().toISOString();
     setRecordingActivityId(recordKey);
 
@@ -504,7 +509,7 @@ export default function ActivityRecorder() {
     } finally {
       setRecordingActivityId(null);
     }
-  }, [foundParticipant, doneActivityIds, recordingActivityId, online, user, eventId, refreshPending]);
+  }, [foundParticipant, doneActivityIds, recordingActivityId, online, user, eventId, refreshPending, isGuestMode, activeEvent]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────────
   const selectSuggestion = useCallback(async (participant: ParticipantSuggestion) => {
