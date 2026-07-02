@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -10,11 +10,9 @@ import { resolveIcon } from "@/lib/experiences";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { QrScannerModal } from "@/components/checkin/QrScannerModal";
-import { SessionPickerModal } from "@/components/activity/SessionPickerModal";
-import { QrValidatorTab } from "@/components/activity/QrValidatorTab";
 import {
-  CheckCircle, XCircle, RotateCcw, Zap, Keyboard, QrCode,
-  MessageSquare, Phone, User, Hash, Ticket, ScanLine, CheckCircle2,
+  CheckCircle, XCircle, RotateCcw, Zap, QrCode,
+  MessageSquare, Phone, User, Hash, CheckCircle2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -27,7 +25,6 @@ import { trackEvent } from "@enter-pro/analytics-sdk";
 import { recordActivityCheckin } from "@/lib/activityTimeTracking";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type AppTab = "recorder" | "validator";
 type Step = "search" | "select";
 type FindStatus = "idle" | "finding" | "not_found" | "not_checked_in" | "error";
 
@@ -37,6 +34,27 @@ interface FoundParticipant {
   name: string;
   phone: string | null;
   is_checked_in: boolean;
+}
+
+interface ParticipantSuggestion extends FoundParticipant {
+  hint: string;
+}
+
+interface ActivitySessionLite {
+  activity_id: string;
+  session_date: string | null;
+  start_time: string;
+  end_time: string;
+  status: "scheduled" | "active" | "completed" | "cancelled";
+}
+
+interface ActivitySessionDisplay {
+  id: string;
+  label: string;
+  start_time: string;
+  end_time: string;
+  session_date: string | null;
+  isNow: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,6 +79,30 @@ function candidateCodes(raw: string): string[] {
     if (suffix && suffix.length <= 6) { set.add(suffix); set.add(suffix.padStart(4, "0")); }
   }
   return [...set].filter(Boolean);
+}
+
+function formatSessionTimeRange(start: string, end: string): string {
+  const fmt = (t: string) => {
+    const [h, m] = t.split(":");
+    const hour24 = parseInt(h, 10);
+    const hour12 = hour24 % 12 || 12;
+    const suffix = hour24 >= 12 ? "PM" : "AM";
+    return `${hour12}:${m} ${suffix}`;
+  };
+  return `${fmt(start)} - ${fmt(end)}`;
+}
+
+function toMinutes(t: string): number {
+  const [h, m] = t.split(":");
+  return parseInt(h, 10) * 60 + parseInt(m, 10);
+}
+
+function isSameLocalDate(dateStr: string | null, now: Date): boolean {
+  if (!dateStr) return true;
+  const d = new Date(`${dateStr}T00:00:00`);
+  return d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
 }
 
 const SEL = "id, code, name, phone, is_checked_in";
@@ -116,29 +158,28 @@ async function lookupParticipantOnline(query: string, eventId: string): Promise<
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function ActivityRecorder() {
-  const [appTab, setAppTab] = useState<AppTab>("recorder");
-
   // ── Step machine ─────────────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>("search");
   const [findStatus, setFindStatus] = useState<FindStatus>("idle");
   const [query, setQuery] = useState("");
-  const [inputMethod, setInputMethod] = useState<"manual" | "qr">("manual");
   const [showScanner, setShowScanner] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [foundParticipant, setFoundParticipant] = useState<FoundParticipant | null>(null);
+  const [suggestions, setSuggestions] = useState<ParticipantSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const searchSeq = useRef(0);
 
   // ── Activity state ────────────────────────────────────────────────────────────
-  // Activities already recorded (activity_log) or already ticketed (session_participations)
+  // Activities already recorded (activity_log)
   const [doneActivityIds, setDoneActivityIds] = useState<Set<string>>(new Set());
-  // Activities that have sessions configured
-  const [sessionActivityIds, setSessionActivityIds] = useState<Set<string>>(new Set());
-  // Which session-based activity to open picker for
-  const [sessionActivity, setSessionActivity] = useState<Activity | null>(null);
   // Session counter for this operator shift
   const [sessionCount, setSessionCount] = useState(0);
   // Direct-record flash feedback
   const [flashId, setFlashId] = useState<string | null>(null);
+  // Prevent accidental repeated taps while a record call is in-flight
+  const [recordingActivityId, setRecordingActivityId] = useState<string | null>(null);
+  const [sessionsByActivity, setSessionsByActivity] = useState<Record<string, ActivitySessionDisplay[]>>({});
 
   const { user } = useAuth();
   const { activeEvent } = useEvent();
@@ -148,7 +189,6 @@ export default function ActivityRecorder() {
   const navigate = useNavigate();
 
   const eventId = isGuestMode ? (guestSession?.eventId ?? "") : (activeEvent?.id ?? "");
-  const eventName = isGuestMode ? (guestSession?.eventName ?? "Event") : (activeEvent?.name ?? "Event");
 
   // Group by category for display
   const grouped = activeActivities
@@ -161,37 +201,211 @@ export default function ActivityRecorder() {
     }, {});
   const categories = Object.keys(grouped);
 
-  // ── Load done activities + session IDs for this participant ────────────────
+  useEffect(() => {
+    const loadSessions = async () => {
+      if (!eventId || !online || activeActivities.length === 0) {
+        setSessionsByActivity({});
+        return;
+      }
+
+      try {
+        const activityIds = activeActivities.map(a => a.id);
+        const { data } = await withTimeout(
+          supabase
+            .from("activity_sessions")
+            .select("activity_id,session_date,start_time,end_time,status")
+            .eq("event_id", eventId)
+            .in("activity_id", activityIds)
+            .in("status", ["scheduled", "active"])
+            .order("start_time")
+        );
+
+        const now = new Date();
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        const groupedSessionsRaw: Record<string, Array<ActivitySessionDisplay & { priority: number; startMinutes: number }>> = {};
+
+        (data as ActivitySessionLite[] | null ?? []).forEach((s) => {
+          if (!s.activity_id || !s.start_time || !s.end_time) return;
+
+          const startMinutes = toMinutes(s.start_time);
+          const endMinutes = toMinutes(s.end_time);
+          const todaySession = isSameLocalDate(s.session_date, now);
+          const inTimeWindow = todaySession && nowMinutes >= startMinutes && nowMinutes < endMinutes;
+          const isNow = inTimeWindow || (s.status === "active" && todaySession);
+
+          let priority = 2;
+          if (isNow) {
+            priority = 0;
+          } else if (todaySession && startMinutes > nowMinutes) {
+            priority = 1;
+          }
+
+          if (!groupedSessionsRaw[s.activity_id]) groupedSessionsRaw[s.activity_id] = [];
+          groupedSessionsRaw[s.activity_id].push({
+            id: `${s.activity_id}:${s.session_date ?? "any"}:${s.start_time}:${s.end_time}`,
+            label: formatSessionTimeRange(s.start_time, s.end_time),
+            start_time: s.start_time,
+            end_time: s.end_time,
+            session_date: s.session_date,
+            isNow,
+            priority,
+            startMinutes,
+          });
+        });
+
+        const groupedSessions: Record<string, ActivitySessionDisplay[]> = {};
+        Object.entries(groupedSessionsRaw).forEach(([activityId, sessions]) => {
+          sessions.sort((a, b) => a.priority - b.priority || a.startMinutes - b.startMinutes);
+          const deduped: ActivitySessionDisplay[] = [];
+          sessions.forEach((s) => {
+            const existing = deduped.find(x => x.id === s.id);
+            if (!existing) {
+              deduped.push({
+                id: s.id,
+                label: s.label,
+                start_time: s.start_time,
+                end_time: s.end_time,
+                session_date: s.session_date,
+                isNow: s.isNow,
+              });
+            } else if (s.isNow) {
+              existing.isNow = true;
+            }
+          });
+          groupedSessions[activityId] = deduped;
+        });
+
+        setSessionsByActivity(groupedSessions);
+      } catch {
+        setSessionsByActivity({});
+      }
+    };
+
+    void loadSessions();
+  }, [eventId, online, activeActivities]);
+
+  const fetchSuggestions = useCallback(async (raw: string): Promise<ParticipantSuggestion[]> => {
+    const trimmed = raw.trim();
+    if (!trimmed || !eventId) return [];
+
+    const byId = new Map<string, ParticipantSuggestion>();
+    const add = (p: FoundParticipant, hint: string) => {
+      if (!byId.has(p.id)) byId.set(p.id, { ...p, hint });
+    };
+
+    try {
+      const walkIns = await getAllWalkIns();
+      const normPhone = trimmed.replace(/\D/g, "");
+      const lower = trimmed.toLowerCase();
+      walkIns
+        .filter(w =>
+          w.event_id === eventId && (
+            w.temp_code.toLowerCase().includes(lower) ||
+            w.name.toLowerCase().includes(lower) ||
+            (w.phone ? w.phone.replace(/\D/g, "").includes(normPhone) : false) ||
+            (w.qr_link ? w.qr_link.includes(trimmed) : false)
+          )
+        )
+        .slice(0, 8)
+        .forEach(w => {
+          add(
+            {
+              id: w.id,
+              code: w.temp_code,
+              name: w.name,
+              phone: w.phone,
+              is_checked_in: w.is_checked_in,
+            },
+            "walk-in"
+          );
+        });
+    } catch {
+      // Ignore walk-in suggestion failures.
+    }
+
+    if (online) {
+      if (trimmed.startsWith("http")) {
+        const { data } = await withTimeout(
+          supabase.from("participants").select(SEL)
+            .eq("event_id", eventId)
+            .eq("qr_link", trimmed)
+            .limit(8)
+        );
+        (data ?? []).forEach((p) => add(p as FoundParticipant, "qr"));
+      }
+
+      const codeCandidates = candidateCodes(trimmed);
+      if (codeCandidates.length > 0) {
+        const { data } = await withTimeout(
+          supabase.from("participants").select(SEL)
+            .eq("event_id", eventId)
+            .in("code", codeCandidates.slice(0, 8))
+            .limit(8)
+        );
+        (data ?? []).forEach((p) => add(p as FoundParticipant, "code"));
+      }
+
+      const digits = trimmed.replace(/\D/g, "");
+      if (digits.length >= 4) {
+        const { data } = await withTimeout(
+          supabase.from("participants").select(SEL)
+            .eq("event_id", eventId)
+            .ilike("phone", `%${digits}%`)
+            .limit(8)
+        );
+        (data ?? []).forEach((p) => add(p as FoundParticipant, "phone"));
+      }
+
+      if (/[a-zA-Z]/.test(trimmed) && trimmed.length >= 2) {
+        const { data } = await withTimeout(
+          supabase.from("participants").select(SEL)
+            .eq("event_id", eventId)
+            .ilike("name", `%${trimmed}%`)
+            .order("name")
+            .limit(8)
+        );
+        (data ?? []).forEach((p) => add(p as FoundParticipant, "name"));
+      }
+    }
+
+    return [...byId.values()].slice(0, 8);
+  }, [eventId, online]);
+
+  // ── Load done activities for this participant ───────────────────────────────
   const loadActivityState = useCallback(async (participantId: string) => {
     const done = new Set<string>();
     try {
       if (online) {
-        const [{ data: logData }, { data: sessionData }, { data: ticketData }] = await Promise.all([
-          withTimeout(supabase.from("activity_logs").select("activity_id")
-            .eq("participant_id", participantId).eq("event_id", eventId)),
-          withTimeout(supabase.from("activity_sessions").select("activity_id")
-            .eq("event_id", eventId).in("status", ["scheduled", "active"])),
-          withTimeout(supabase.from("session_participations").select("activity_id")
-            .eq("participant_id", participantId).eq("event_id", eventId)),
-        ]);
-        (logData ?? []).forEach(r => { if (r.activity_id) done.add(r.activity_id); });
-        (ticketData ?? []).forEach(r => { if (r.activity_id) done.add(r.activity_id); });
-        const sessIds = new Set<string>((sessionData ?? []).map((r: { activity_id: string }) => r.activity_id));
-        setSessionActivityIds(sessIds);
+        const { data: logData } = await withTimeout(supabase.from("activity_logs").select("activity_id")
+          .eq("participant_id", participantId).eq("event_id", eventId));
+        (logData ?? []).forEach(r => { if (r.activity_id) done.add(`activity:${r.activity_id}`); });
       }
       // Offline queue check
       const queue = await getSyncQueueItems();
       queue.forEach(m => {
         if (m.type === "activity_log" && m.payload.participant_id === participantId && m.payload.activity_id) {
-          done.add(m.payload.activity_id as string);
-        }
-        if (m.type === "session_participation" && m.payload.participant_id === participantId && m.payload.activity_id) {
-          done.add(m.payload.activity_id as string);
+          done.add(`activity:${m.payload.activity_id as string}`);
         }
       });
     } catch { /* best-effort */ }
     setDoneActivityIds(done);
   }, [online, eventId]);
+
+  const applyParticipantSelection = useCallback(async (participant: FoundParticipant) => {
+    setErrorMsg("");
+    setDoneActivityIds(new Set());
+
+    if (!participant.is_checked_in) {
+      setFoundParticipant(participant);
+      setFindStatus("not_checked_in");
+      return;
+    }
+
+    setFoundParticipant(participant);
+    await loadActivityState(participant.id);
+    setFindStatus("idle");
+    setStep("select");
+  }, [loadActivityState]);
 
   // ── Find participant ──────────────────────────────────────────────────────────
   const findParticipant = useCallback(async (raw: string) => {
@@ -214,16 +428,7 @@ export default function ActivityRecorder() {
         if (!participant) { setFindStatus("not_found"); return; }
       }
 
-      if (!participant.is_checked_in) {
-        setFoundParticipant(participant);
-        setFindStatus("not_checked_in");
-        return;
-      }
-
-      setFoundParticipant(participant);
-      await loadActivityState(participant.id);
-      setStep("select");
-      setFindStatus("idle");
+      await applyParticipantSelection(participant);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setErrorMsg(msg.includes("timed out") ? "Request timed out. Check connection." : msg);
@@ -231,67 +436,86 @@ export default function ActivityRecorder() {
     } finally {
       setLoading(false);
     }
-  }, [online, eventId, loadActivityState]);
+  }, [online, eventId, applyParticipantSelection]);
 
-  // ── Direct record for Club 100 (is_single_session = true) ────────────────────
-  const directRecord = useCallback(async (activity: Activity) => {
-    if (!foundParticipant || doneActivityIds.has(activity.id)) return;
+  // ── Direct record for all activities ────────────────────────────────────────
+  const directRecord = useCallback(async (activity: Activity, session?: ActivitySessionDisplay) => {
+    const recordKey = session ? `session:${session.id}` : `activity:${activity.id}`;
+    if (!foundParticipant || doneActivityIds.has(recordKey) || recordingActivityId) return;
     const now = new Date().toISOString();
+    setRecordingActivityId(recordKey);
 
-    if (!online) {
-      const alreadyQueued = await localActivityCheck(foundParticipant.id, activity.id);
-      if (!alreadyQueued) {
-        await queueMutation("activity_log", {
-          participant_id: foundParticipant.id,
-          participant_code: foundParticipant.code,
-          experience: activity.code,
-          activity_id: activity.id,
-          points_awarded: activity.points_value,
-          recorded_by: user?.id ?? null,
-          event_id: eventId,
-          recorded_at: now,
-        });
-        await refreshPending();
-      }
-    } else {
-      const { data: existing } = await withTimeout(
-        supabase.from("activity_logs").select("id")
-          .eq("participant_id", foundParticipant.id).eq("activity_id", activity.id).maybeSingle()
-      );
-      if (!existing) {
-        await withTimeout(supabase.from("activity_logs").insert({
-          participant_id: foundParticipant.id,
-          participant_code: foundParticipant.code,
-          experience: activity.code,
-          activity_id: activity.id,
-          points_awarded: activity.points_value,
-          recorded_by: user?.id ?? null,
-          event_id: eventId,
-        }));
+    try {
+      if (!online) {
+        const alreadyQueued = session ? false : await localActivityCheck(foundParticipant.id, activity.id);
+        if (!alreadyQueued) {
+          await queueMutation("activity_log", {
+            participant_id: foundParticipant.id,
+            participant_code: foundParticipant.code,
+            experience: activity.code,
+            activity_id: activity.id,
+            points_awarded: activity.points_value,
+            recorded_by: user?.id ?? null,
+            event_id: eventId,
+            recorded_at: now,
+          });
+          await refreshPending();
+        }
+      } else {
+        let canInsert = true;
+        if (!session) {
+          const { data: existing } = await withTimeout(
+            supabase.from("activity_logs").select("id")
+              .eq("participant_id", foundParticipant.id).eq("activity_id", activity.id).maybeSingle()
+          );
+          canInsert = !existing;
+        }
+
+        if (canInsert) {
+          await withTimeout(supabase.from("activity_logs").insert({
+            participant_id: foundParticipant.id,
+            participant_code: foundParticipant.code,
+            experience: activity.code,
+            activity_id: activity.id,
+            points_awarded: activity.points_value,
+            recorded_by: user?.id ?? null,
+            event_id: eventId,
+          }));
+        }
+
+        // Track time spent on activity (auto-checkout previous activity)
+        await recordActivityCheckin(eventId, foundParticipant.id, activity.id);
       }
 
-      // Track time spent on activity (auto-checkout previous activity)
-      await recordActivityCheckin(eventId, foundParticipant.id, activity.id);
+      // Flash green feedback
+      setFlashId(recordKey);
+      setTimeout(() => setFlashId(null), 1200);
+      setDoneActivityIds(prev => new Set([...prev, recordKey]));
+      setSessionCount(c => c + 1);
+      speak(VM.activity_success);
+      trackEvent("activity_recorded", {
+        eventType: "conversion",
+        properties: { mode: online ? "online" : "offline", points: activity.points_value ?? 0 },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to record activity";
+      setErrorMsg(msg.includes("timed out") ? "Request timed out. Check connection." : msg);
+      setFindStatus("error");
+    } finally {
+      setRecordingActivityId(null);
     }
-
-    // Flash green feedback
-    setFlashId(activity.id);
-    setTimeout(() => setFlashId(null), 1200);
-    setDoneActivityIds(prev => new Set([...prev, activity.id]));
-    setSessionCount(c => c + 1);
-    speak(VM.activity_success);
-    trackEvent("activity_recorded", {
-      eventType: "conversion",
-      properties: { mode: online ? "online" : "offline", points: activity.points_value ?? 0 },
-    });
-  }, [foundParticipant, doneActivityIds, online, user, eventId, refreshPending]);
+  }, [foundParticipant, doneActivityIds, recordingActivityId, online, user, eventId, refreshPending]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────────
-  const handleManualSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-    if (step === "search") findParticipant(query);
-  };
+  const selectSuggestion = useCallback(async (participant: ParticipantSuggestion) => {
+    setLoading(true);
+    setSuggestions([]);
+    try {
+      await applyParticipantSelection(participant);
+    } finally {
+      setLoading(false);
+    }
+  }, [applyParticipantSelection]);
 
   const handleQrScan = (value: string) => {
     setQuery(value);
@@ -305,9 +529,50 @@ export default function ActivityRecorder() {
     setQuery("");
     setFoundParticipant(null);
     setDoneActivityIds(new Set());
-    setSessionActivity(null);
+    setSuggestions([]);
     setErrorMsg("");
   };
+
+  useEffect(() => {
+    if (step !== "search") return;
+
+    const trimmed = query.trim();
+    if (!trimmed || trimmed.length < 2) {
+      setSuggestions([]);
+      setSuggestionsLoading(false);
+      if (findStatus !== "not_checked_in") setFindStatus("idle");
+      return;
+    }
+
+    const seq = ++searchSeq.current;
+    setSuggestionsLoading(true);
+    setFindStatus("idle");
+
+    const timer = setTimeout(async () => {
+      try {
+        const result = await fetchSuggestions(trimmed);
+        if (searchSeq.current !== seq) return;
+        setSuggestions(result);
+
+        const normalized = trimmed.toLowerCase();
+        const exact = result.find(p =>
+          p.code.toLowerCase() === normalized ||
+          p.name.toLowerCase() === normalized ||
+          (p.phone ? p.phone.replace(/\D/g, "") === trimmed.replace(/\D/g, "") : false)
+        );
+        if (exact) {
+          await selectSuggestion(exact);
+        }
+      } catch {
+        if (searchSeq.current !== seq) return;
+        setSuggestions([]);
+      } finally {
+        if (searchSeq.current === seq) setSuggestionsLoading(false);
+      }
+    }, 180);
+
+    return () => clearTimeout(timer);
+  }, [query, step, fetchSuggestions, findStatus, selectSuggestion]);
 
   useEffect(() => {
     if (findStatus === "not_found") speak(VM.activity_not_found);
@@ -340,59 +605,149 @@ export default function ActivityRecorder() {
   const ActivityCard = ({ activity }: { activity: Activity }) => {
     const Icon = resolveIcon(activity.icon_name);
     const color = activity.color ?? "hsl(var(--primary))";
-    const isDone = doneActivityIds.has(activity.id);
-    const isSingle = activity.is_single_session === true; // Club 100
-    const hasSession = sessionActivityIds.has(activity.id) && !isSingle;
-    const isFlashing = flashId === activity.id;
+    const activityKey = `activity:${activity.id}`;
+    const isDone = doneActivityIds.has(activityKey);
+    const isFlashing = flashId === activityKey;
+    const isRecording = recordingActivityId === activityKey;
+    const activitySessions = sessionsByActivity[activity.id] ?? [];
+    const hasSessions = activitySessions.length > 0;
+    const doneSessions = activitySessions.filter((s) => doneActivityIds.has(`session:${s.id}`)).length;
+
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    const nowSessions: ActivitySessionDisplay[] = [];
+    const upcomingSessions: ActivitySessionDisplay[] = [];
+    const pastSessions: ActivitySessionDisplay[] = [];
+
+    activitySessions.forEach((s) => {
+      if (s.isNow) {
+        nowSessions.push(s);
+        return;
+      }
+
+      if (s.session_date) {
+        const sessionDay = new Date(`${s.session_date}T00:00:00`).getTime();
+        if (sessionDay > todayMidnight) {
+          upcomingSessions.push(s);
+          return;
+        }
+        if (sessionDay < todayMidnight) {
+          pastSessions.push(s);
+          return;
+        }
+      }
+
+      const start = toMinutes(s.start_time);
+      if (start > nowMinutes) {
+        upcomingSessions.push(s);
+      } else {
+        pastSessions.push(s);
+      }
+    });
+
+    const renderSessionButton = (s: ActivitySessionDisplay) => {
+      const sessionKey = `session:${s.id}`;
+      const sessionDone = doneActivityIds.has(sessionKey);
+      const sessionRecording = recordingActivityId === sessionKey;
+      const sessionFlashing = flashId === sessionKey;
+
+      return (
+        <button
+          key={s.id}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (sessionDone || sessionRecording) return;
+            void directRecord(activity, s);
+          }}
+          disabled={sessionDone || sessionRecording}
+          className={cn(
+            "w-full text-[9px] leading-tight px-1.5 py-1 rounded border transition-colors text-left",
+            sessionDone
+              ? "bg-success/10 border-success/30 text-success"
+              : sessionFlashing
+                ? "bg-success/10 border-success/30 text-success"
+                : "bg-secondary border-border text-muted-foreground hover:border-primary/40"
+          )}
+        >
+          <span>{sessionRecording ? "Recording..." : s.label}</span>
+          {s.isNow && (
+            <span className="ml-1.5 inline-flex items-center rounded px-1 py-0.5 text-[8px] font-bold bg-success/20 text-success">
+              Now
+            </span>
+          )}
+        </button>
+      );
+    };
 
     const handleClick = () => {
-      if (isDone) return;
-      if (isSingle) {
-        directRecord(activity);
-      } else {
-        setSessionActivity(activity);
-      }
+      if (isDone || isRecording) return;
+      if (hasSessions) return;
+      directRecord(activity);
     };
 
     return (
-      <button
+      <div
         onClick={handleClick}
-        disabled={isDone}
         className={cn(
           "relative flex flex-col items-center gap-1.5 p-3 rounded-xl border-2 transition-all duration-200 text-center",
           isDone
             ? "border-success/40 bg-success/5 opacity-70 cursor-not-allowed"
             : isFlashing
               ? "border-success bg-success/20 scale-95"
-              : isSingle
-                ? "border-primary/40 bg-primary/5 hover:border-primary hover:bg-primary/10 active:scale-95"
-                : hasSession
-                  ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/60 hover:bg-amber-500/10 active:scale-95"
-                  : "border-border bg-secondary hover:border-primary/40 active:scale-95"
+              : hasSessions
+                ? "border-primary/30 bg-primary/5"
+                : "border-primary/40 bg-primary/5 hover:border-primary hover:bg-primary/10 active:scale-95 cursor-pointer"
         )}
       >
         <div className="p-1.5 rounded-lg" style={{ backgroundColor: isDone ? undefined : `${color}25` }}>
           <Icon className="h-4 w-4" style={{ color: isDone ? "hsl(var(--success))" : color }} />
         </div>
         <span className="text-xs font-semibold text-foreground leading-tight">{activity.name}</span>
-        <span className="text-[10px] text-muted-foreground">{activity.points_value} pts</span>
+        <span className="text-[10px] text-muted-foreground">{isRecording ? "Recording..." : `${activity.points_value} pts`}</span>
+
+        {activitySessions.length > 0 && (
+          <div className="w-full mt-1 space-y-1">
+            {nowSessions.length > 0 && (
+              <div className="space-y-1">
+                <span className="block text-[9px] font-semibold text-success">Now</span>
+                {nowSessions.map(renderSessionButton)}
+              </div>
+            )}
+            {upcomingSessions.length > 0 && (
+              <div className="space-y-1">
+                <span className="block text-[9px] font-semibold text-primary">Upcoming</span>
+                {upcomingSessions.map(renderSessionButton)}
+              </div>
+            )}
+            {pastSessions.length > 0 && (
+              <div className="space-y-1">
+                <span className="block text-[9px] font-semibold text-muted-foreground">Past</span>
+                {pastSessions.map(renderSessionButton)}
+              </div>
+            )}
+            <span className="block text-[9px] text-muted-foreground">{doneSessions}/{activitySessions.length} session(s) recorded</span>
+          </div>
+        )}
+
+        {!hasSessions && (
+          <span className="text-[9px] text-muted-foreground">Tap to record</span>
+        )}
 
         {/* Corner indicator */}
         <div className="absolute top-1.5 right-1.5">
           {isDone
             ? <CheckCircle2 className="h-3.5 w-3.5 text-success" />
-            : isSingle
-              ? <Zap className="h-3.5 w-3.5 text-primary" />
-              : hasSession
-                ? <Ticket className="h-3.5 w-3.5 text-amber-500" />
-                : null}
+            : <Zap className="h-3.5 w-3.5 text-primary" />}
         </div>
 
         {/* "Done" label */}
-        {isDone && (
+        {isDone && !hasSessions && (
           <span className="absolute bottom-1 left-0 right-0 text-[9px] font-bold text-success text-center">Done</span>
         )}
-      </button>
+      </div>
     );
   };
 
@@ -400,120 +755,83 @@ export default function ActivityRecorder() {
   return (
     <AppLayout title="Activity Recorder" subtitle="Log participant experience at each zone">
       <div className="max-w-2xl mx-auto space-y-6">
-
-        {/* ── App tabs ─────────────────────────────────────────────────────── */}
-        <div className="flex gap-2">
-          {([
-            { id: "recorder", label: "Record Activity", Icon: Zap },
-            { id: "validator", label: "QR Validator", Icon: ScanLine },
-          ] as const).map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              onClick={() => setAppTab(id)}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 text-sm font-bold transition-all",
-                appTab === id
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border bg-secondary text-muted-foreground hover:text-foreground"
-              )}
-            >
-              <Icon className="h-4 w-4" />{label}
-            </button>
-          ))}
-        </div>
-
-        {/* ── QR Validator tab ─────────────────────────────────────────────── */}
-        {appTab === "validator" && (
-          <div className="glass-card rounded-2xl p-6">
-            <h3 className="text-xs font-bold uppercase tracking-[2px] text-muted-foreground mb-4">
-              Scan to Validate Session Tickets
-            </h3>
-            {eventId
-              ? <QrValidatorTab eventId={eventId} />
-              : <p className="text-sm text-muted-foreground text-center py-8">No active event selected.</p>}
-          </div>
-        )}
-
-        {appTab === "recorder" && (<>
+        <>
 
           {/* ── Step 1: Search ────────────────────────────────────────────────── */}
           {(step === "search" || findStatus !== "idle") && (
             <div className="glass-card rounded-2xl p-6">
               <h3 className="text-xs font-bold uppercase tracking-[2px] text-muted-foreground mb-4">
-                Step 1 — Identify Participant
+                Find Participant
               </h3>
 
-              <div className="flex gap-2 mb-4">
-                {([
-                  { id: "manual", label: "Search", Icon: Keyboard },
-                  { id: "qr", label: "Scan QR", Icon: QrCode },
-                ] as const).map(({ id, label, Icon }) => (
-                  <button
-                    key={id}
-                    onClick={() => setInputMethod(id)}
-                    className={cn(
-                      "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 text-sm font-bold transition-all",
-                      inputMethod === id
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border bg-secondary text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    <Icon className="h-4 w-4" />{label}
-                  </button>
-                ))}
-              </div>
-
-              {inputMethod === "manual" ? (
-                <form onSubmit={handleManualSubmit} className="space-y-3">
-                  <Input
-                    value={query}
-                    onChange={e => setQuery(e.target.value)}
-                    placeholder="Code, name, or phone number"
-                    className="h-14 pl-4 pr-4 text-lg font-semibold bg-secondary border-2 focus:border-primary scan-pulse"
-                    autoFocus
-                    disabled={loading}
-                    autoComplete="off"
-                  />
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {[
-                      { icon: Hash, label: "Code", example: "0245" },
-                      { icon: User, label: "Name", example: "Daniel A." },
-                      { icon: Phone, label: "Phone", example: "08012345678" },
-                      { icon: QrCode, label: "QR URL", example: "gatheringng.com/…" },
-                    ].map(({ icon: Icon, label, example }) => (
-                      <div key={label} className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                        <Icon className="h-2.5 w-2.5 shrink-0" />
-                        <span className="font-semibold">{label}:</span>
-                        <span className="font-mono">{example}</span>
-                      </div>
-                    ))}
-                  </div>
+              <div className="space-y-3">
+                <Input
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  placeholder="Code, name, phone, or QR link"
+                  className="h-14 pl-4 pr-4 text-lg font-semibold bg-secondary border-2 focus:border-primary scan-pulse"
+                  autoFocus
+                  disabled={loading}
+                  autoComplete="off"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && suggestions.length > 0) {
+                      e.preventDefault();
+                      void selectSuggestion(suggestions[0]);
+                    }
+                  }}
+                />
+                <div className="flex items-center gap-2 flex-wrap text-[10px] text-muted-foreground">
+                  <span className="flex items-center gap-1"><Hash className="h-2.5 w-2.5" />Code</span>
+                  <span className="flex items-center gap-1"><User className="h-2.5 w-2.5" />Name</span>
+                  <span className="flex items-center gap-1"><Phone className="h-2.5 w-2.5" />Phone</span>
+                  <span className="flex items-center gap-1"><QrCode className="h-2.5 w-2.5" />QR link</span>
+                </div>
+                <div className="grid grid-cols-1 gap-2">
                   <Button
-                    type="submit"
-                    disabled={loading || !query.trim()}
-                    className="w-full h-12 font-bold uppercase tracking-wider bg-primary text-primary-foreground shadow-glow-primary hover:bg-primary/90"
-                  >
-                    {loading
-                      ? <span className="flex items-center gap-2"><span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />Searching…</span>
-                      : <span className="flex items-center gap-2"><Zap className="h-4 w-4" />Find Participant</span>}
-                  </Button>
-                </form>
-              ) : (
-                <div className="space-y-4">
-                  {query && (
-                    <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-secondary border border-border">
-                      <span className="text-xs text-muted-foreground">Last scanned:</span>
-                      <span className="text-sm font-mono font-bold text-foreground truncate">{query}</span>
-                    </div>
-                  )}
-                  <Button
+                    type="button"
+                    variant="outline"
                     onClick={() => setShowScanner(true)}
                     disabled={loading}
-                    className="w-full h-14 font-bold uppercase tracking-wider bg-primary text-primary-foreground shadow-glow-primary hover:bg-primary/90 gap-3"
+                    className="h-12 font-bold uppercase tracking-wider gap-2"
                   >
-                    <QrCode className="h-5 w-5" />
-                    {loading ? "Searching…" : "Open Camera Scanner"}
+                    <QrCode className="h-4 w-4" />Open Scanner
                   </Button>
+                </div>
+              </div>
+
+              {(suggestionsLoading || suggestions.length > 0 || (query.trim().length >= 2 && !loading)) && (
+                <div className="mt-4 rounded-xl border border-border bg-secondary/30 p-2 space-y-1">
+                  {suggestionsLoading && (
+                    <p className="px-2 py-1 text-xs text-muted-foreground">Searching participants...</p>
+                  )}
+
+                  {!suggestionsLoading && suggestions.length === 0 && query.trim().length >= 2 && (
+                    <p className="px-2 py-1 text-xs text-muted-foreground">No participant suggestion yet.</p>
+                  )}
+
+                  {!suggestionsLoading && suggestions.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => void selectSuggestion(p)}
+                      className="w-full text-left rounded-lg px-3 py-2 hover:bg-secondary transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-bold text-foreground truncate">{p.name}</p>
+                        <span className={cn(
+                          "text-[10px] px-2 py-0.5 rounded font-semibold",
+                          p.is_checked_in ? "bg-success/20 text-success" : "bg-destructive/15 text-destructive"
+                        )}>
+                          {p.is_checked_in ? "Checked-in" : "Not checked-in"}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span className="font-mono">#{p.code}</span>
+                        {p.phone && <span>{p.phone}</span>}
+                        <span className="uppercase tracking-wide">{p.hint}</span>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               )}
 
@@ -556,7 +874,7 @@ export default function ActivityRecorder() {
             <div className="glass-card rounded-2xl p-6 fade-in-up space-y-5">
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-[2px] text-muted-foreground mb-3">
-                  Step 2 — Select Activity
+                  Choose Activity
                 </h3>
                 <ParticipantCard />
               </div>
@@ -564,8 +882,7 @@ export default function ActivityRecorder() {
               {/* Legend */}
               <div className="flex items-center gap-4 text-[10px] text-muted-foreground flex-wrap">
                 <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3 text-success" />Done</span>
-                <span className="flex items-center gap-1"><Ticket className="h-3 w-3 text-amber-500" />Tap to ticket</span>
-                <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-primary" />Direct record</span>
+                <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-primary" />Tap to record</span>
               </div>
 
               {activitiesLoading ? (
@@ -605,33 +922,11 @@ export default function ActivityRecorder() {
             <span className="text-lg font-black text-primary">{sessionCount} recorded</span>
           </div>
 
-        </>)}
+        </>
       </div>
 
       {showScanner && (
         <QrScannerModal onScan={handleQrScan} onClose={() => setShowScanner(false)} />
-      )}
-
-      {sessionActivity && foundParticipant && (
-        <SessionPickerModal
-          activity={sessionActivity}
-          participant={{
-            id: foundParticipant.id,
-            code: foundParticipant.code,
-            name: foundParticipant.name,
-            phone: foundParticipant.phone,
-          }}
-          eventId={eventId}
-          eventName={eventName}
-          staffName={user?.email ?? "Staff"}
-          online={online}
-          onClose={() => setSessionActivity(null)}
-          onDone={() => {
-            setSessionCount(c => c + 1);
-            setDoneActivityIds(prev => new Set([...prev, sessionActivity!.id]));
-            setSessionActivity(null);
-          }}
-        />
       )}
     </AppLayout>
   );

@@ -3,8 +3,6 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useEvent, SoulEvent } from "@/contexts/EventContext";
 import { Input } from "@/components/ui/input";
-import { EventAccessTokenManager } from "@/components/EventAccessTokenManager";
-import * as XLSX from "xlsx";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -235,8 +233,9 @@ export default function Events() {
                   setImportError(null);
                   try {
                     const reader = new FileReader();
-                    reader.onload = (ev) => {
+                    reader.onload = async (ev) => {
                       try {
+                        const XLSX = await import("xlsx");
                         const data = ev.target?.result;
                         const workbook = XLSX.read(data as ArrayBuffer, { type: "array" });
                         const sheetName = workbook.SheetNames[0];
@@ -443,7 +442,6 @@ export default function Events() {
                       className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
-                    <EventAccessTokenManager eventId={event.id} eventName={event.name} eventCode={event.code} />
                     {!isActive && (
                       <Button
                         size="sm"
