@@ -28,6 +28,8 @@ interface ParticipantData {
         activity_name: string;
         total_minutes: number;
         checkin_count: number;
+        is_currently_active?: boolean;
+        last_checkin?: string;
     }>;
     total_minutes: number;
 }
@@ -41,6 +43,28 @@ interface ActivityEngagementData {
     total_time_minutes: number;
     total_time_hours: number;
 }
+
+type ParticipantRow = {
+    id: string;
+    name: string;
+    code: string;
+    source: string | null;
+};
+
+type ActivityRow = {
+    id: string;
+    name: string;
+};
+
+type ParticipationRow = {
+    id: string;
+    event_id: string;
+    participant_id: string;
+    activity_id: string;
+    checkin_time: string;
+    checkout_time: string | null;
+    duration_minutes: number | null;
+};
 
 export default function ActivityTimeAnalytics() {
     const { user } = useAuth();
@@ -56,6 +80,12 @@ export default function ActivityTimeAnalytics() {
 
     const [participants, setParticipants] = useState<ParticipantData[]>([]);
     const [activities, setActivities] = useState<ActivityEngagementData[]>([]);
+    const [nowTick, setNowTick] = useState(() => Date.now());
+    const [participantRows, setParticipantRows] = useState<ParticipantRow[]>([]);
+    const [activityRows, setActivityRows] = useState<ActivityRow[]>([]);
+    const [participationRows, setParticipationRows] = useState<ParticipationRow[]>([]);
+
+    const hasActiveRows = participationRows.some((row) => row.checkout_time == null);
 
     const withTimeout = async <T,>(promise: Promise<T>, timeoutMs = 12000): Promise<T> => {
         return await new Promise<T>((resolve, reject) => {
@@ -76,6 +106,11 @@ export default function ActivityTimeAnalytics() {
     };
 
     useEffect(() => {
+        const interval = setInterval(() => setNowTick(Date.now()), 1000);
+        return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
         if (!user) {
             setLoading(false);
             return;
@@ -88,6 +123,120 @@ export default function ActivityTimeAnalytics() {
         }
         fetchData();
     }, [eventId, user]);
+
+    useEffect(() => {
+        if (!participantRows.length || !activityRows.length) return;
+
+        const rebuild = () => {
+            const activityMap = new Map<string, string>();
+            activityRows.forEach((activity) => activityMap.set(activity.id, activity.name));
+
+            const types = new Set<string>();
+            const processedParticipants: ParticipantData[] = [];
+
+            participantRows.forEach((participant) => {
+                if (participant.source) {
+                    types.add(participant.source);
+                }
+
+                const participations = participationRows.filter((row) => row.participant_id === participant.id);
+                const activityActivityMap = new Map<string, { name: string; minutes: number; count: number; isActive: boolean; lastCheckin?: string }>();
+
+                participations.forEach((participation) => {
+                    const activityName = activityMap.get(participation.activity_id) || `Activity ${participation.activity_id}`;
+
+                    if (!activityActivityMap.has(participation.activity_id)) {
+                        activityActivityMap.set(participation.activity_id, {
+                            name: activityName,
+                            minutes: 0,
+                            count: 0,
+                            isActive: false,
+                            lastCheckin: participation.checkin_time,
+                        });
+                    }
+
+                    const data = activityActivityMap.get(participation.activity_id)!;
+                    data.count += 1;
+                    data.lastCheckin = participation.checkin_time;
+
+                    const checkoutTime = participation.checkout_time ? new Date(participation.checkout_time).getTime() : nowTick;
+                    const checkinTime = new Date(participation.checkin_time).getTime();
+                    const minutes = participation.duration_minutes != null
+                        ? Math.max(0, Math.round(participation.duration_minutes))
+                        : Math.max(0, Math.round((checkoutTime - checkinTime) / 60000));
+                    data.minutes += minutes;
+                    if (!participation.checkout_time) data.isActive = true;
+                });
+
+                const activitiesList = Array.from(activityActivityMap.entries()).map(([_, data]) => ({
+                    activity_name: data.name,
+                    total_minutes: data.minutes,
+                    checkin_count: data.count,
+                    is_currently_active: data.isActive,
+                    last_checkin: data.lastCheckin,
+                }));
+
+                const totalMinutes = activitiesList.reduce((sum, a) => sum + a.total_minutes, 0);
+
+                processedParticipants.push({
+                    participant_id: participant.id,
+                    participant_name: participant.name,
+                    participant_code: participant.code || "N/A",
+                    participant_type: participant.source || "General",
+                    activities: activitiesList.sort((a, b) => b.total_minutes - a.total_minutes),
+                    total_minutes: totalMinutes,
+                });
+            });
+
+            const engagementMap = new Map<string, {
+                name: string;
+                participants: Set<string>;
+                checkins: number;
+                totalMinutes: number;
+            }>();
+
+            participationRows.forEach((record) => {
+                const activityName = activityMap.get(record.activity_id) || `Activity ${record.activity_id}`;
+                if (!engagementMap.has(record.activity_id)) {
+                    engagementMap.set(record.activity_id, {
+                        name: activityName,
+                        participants: new Set(),
+                        checkins: 0,
+                        totalMinutes: 0,
+                    });
+                }
+
+                const data = engagementMap.get(record.activity_id)!;
+                data.participants.add(record.participant_id);
+                data.checkins += 1;
+                const checkinTime = new Date(record.checkin_time).getTime();
+                const checkoutTime = record.checkout_time ? new Date(record.checkout_time).getTime() : nowTick;
+                const minutes = record.duration_minutes != null
+                    ? Math.max(0, Math.round(record.duration_minutes))
+                    : Math.max(0, Math.round((checkoutTime - checkinTime) / 60000));
+                data.totalMinutes += minutes;
+            });
+
+            const engagementList: ActivityEngagementData[] = Array.from(engagementMap.entries()).map(([activityId, data]) => {
+                const avgDuration = data.checkins > 0 ? Math.round(data.totalMinutes / data.checkins) : 0;
+                return {
+                    activity_id: activityId,
+                    activity_name: data.name,
+                    total_participants: data.participants.size,
+                    total_checkins: data.checkins,
+                    average_duration_minutes: avgDuration,
+                    total_time_minutes: data.totalMinutes,
+                    total_time_hours: Math.round((data.totalMinutes / 60) * 100) / 100,
+                };
+            });
+
+            setParticipantTypes(Array.from(types).sort());
+            setParticipants(processedParticipants.sort((a, b) => b.total_minutes - a.total_minutes));
+            setActivities(engagementList.sort((a, b) => b.total_time_minutes - a.total_time_minutes));
+        };
+
+        rebuild();
+    }, [participantRows, activityRows, participationRows, nowTick]);
 
     const fetchData = async () => {
         if (!eventId) {
@@ -139,118 +288,9 @@ export default function ActivityTimeAnalytics() {
 
             if (activitiesError) throw activitiesError;
 
-            // Create activity lookup
-            const activityMap = new Map<string, string>();
-            if (activitiesData) {
-                activitiesData.forEach((a: any) => {
-                    activityMap.set(a.id, a.name);
-                });
-            }
-
-            // Process participant data
-            const types = new Set<string>();
-            const processedParticipants: ParticipantData[] = [];
-
-            if (participantData) {
-                for (const participant of participantData) {
-                    if (participant.source) {
-                        types.add(participant.source);
-                    }
-
-                    // Get participations for this participant
-                    const participations = (allParticipations || []).filter(
-                        (p: any) => p.participant_id === participant.id
-                    );
-
-                    const activityActivityMap = new Map<string, { name: string; minutes: number; count: number }>();
-
-                    for (const participation of participations) {
-                        const activityName = activityMap.get(participation.activity_id) || `Activity ${participation.activity_id}`;
-
-                        if (!activityActivityMap.has(participation.activity_id)) {
-                            activityActivityMap.set(participation.activity_id, {
-                                name: activityName,
-                                minutes: 0,
-                                count: 0,
-                            });
-                        }
-
-                        const data = activityActivityMap.get(participation.activity_id)!;
-                        data.count += 1;
-                        data.minutes += toMinutes(
-                            participation.checkin_time,
-                            participation.checkout_time,
-                            participation.duration_minutes
-                        );
-                    }
-
-                    const activitiesList = Array.from(activityActivityMap.entries()).map(([_, data]) => ({
-                        activity_name: data.name,
-                        total_minutes: data.minutes,
-                        checkin_count: data.count,
-                    }));
-
-                    const totalMinutes = activitiesList.reduce((sum, a) => sum + a.total_minutes, 0);
-
-                    processedParticipants.push({
-                        participant_id: participant.id,
-                        participant_name: participant.name,
-                        participant_code: participant.code || "N/A",
-                        participant_type: participant.source || "General",
-                        activities: activitiesList.sort((a, b) => b.total_minutes - a.total_minutes),
-                        total_minutes: totalMinutes,
-                    });
-                }
-            }
-
-            setParticipantTypes(Array.from(types).sort());
-            setParticipants(processedParticipants.sort((a, b) => b.total_minutes - a.total_minutes));
-
-            // Process activity engagement data
-            const engagementMap = new Map<string, {
-                name: string;
-                participants: Set<string>;
-                checkins: number;
-                totalMinutes: number;
-            }>();
-
-            if (allParticipations) {
-                for (const record of allParticipations) {
-                    const activityName = activityMap.get(record.activity_id) || `Activity ${record.activity_id}`;
-                    const activityId = record.activity_id;
-
-                    if (!engagementMap.has(activityId)) {
-                        engagementMap.set(activityId, {
-                            name: activityName,
-                            participants: new Set(),
-                            checkins: 0,
-                            totalMinutes: 0,
-                        });
-                    }
-
-                    const data = engagementMap.get(activityId)!;
-                    data.participants.add(record.participant_id);
-                    data.checkins += 1;
-                    data.totalMinutes += toMinutes(record.checkin_time, record.checkout_time, record.duration_minutes);
-                }
-            }
-
-            const engagementList: ActivityEngagementData[] = Array.from(engagementMap.entries()).map(
-                ([_, data]) => {
-                    const avgDuration = data.checkins > 0 ? Math.round(data.totalMinutes / data.checkins) : 0;
-                    return {
-                        activity_id: _,
-                        activity_name: data.name,
-                        total_participants: data.participants.size,
-                        total_checkins: data.checkins,
-                        average_duration_minutes: avgDuration,
-                        total_time_minutes: data.totalMinutes,
-                        total_time_hours: Math.round((data.totalMinutes / 60) * 100) / 100,
-                    };
-                }
-            );
-
-            setActivities(engagementList.sort((a, b) => b.total_time_minutes - a.total_time_minutes));
+            setParticipantRows((participantData ?? []) as ParticipantRow[]);
+            setActivityRows((activitiesData ?? []) as ActivityRow[]);
+            setParticipationRows(allParticipations as ParticipationRow[]);
         } catch (error) {
             console.error("Error fetching analytics data:", error);
             toast({
@@ -278,6 +318,22 @@ export default function ActivityTimeAnalytics() {
         const hours = Math.floor(minutes / 60);
         const mins = minutes % 60;
         return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    };
+
+    const formatLiveDuration = (checkinTime: string, checkoutTime?: string | null, durationMinutes?: number | null) => {
+        const start = new Date(checkinTime).getTime();
+        const end = checkoutTime ? new Date(checkoutTime).getTime() : nowTick;
+        const seconds = durationMinutes != null && checkoutTime
+            ? Math.max(0, Math.round(durationMinutes * 60))
+            : Math.max(0, Math.round((end - start) / 1000));
+
+        if (seconds < 60) return `${seconds}s`;
+        const minutes = Math.floor(seconds / 60);
+        const remainder = seconds % 60;
+        if (minutes < 60) return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`;
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return `${hours}h ${mins}m ${remainder}s`;
     };
 
     return (
@@ -342,6 +398,7 @@ export default function ActivityTimeAnalytics() {
                         onSearchChange={setSearchQuery}
                         onTypeFilterChange={setParticipantTypeFilter}
                         formatDuration={formatDuration}
+                        formatLiveDuration={formatLiveDuration}
                     />
                 ) : (
                     <ActivityEngagementView
@@ -362,6 +419,7 @@ interface ParticipantBreakdownViewProps {
     onSearchChange: (query: string) => void;
     onTypeFilterChange: (type: string) => void;
     formatDuration: (minutes: number) => string;
+    formatLiveDuration: (checkinTime: string, checkoutTime?: string | null, durationMinutes?: number | null) => string;
 }
 
 function ParticipantBreakdownView({
@@ -372,6 +430,7 @@ function ParticipantBreakdownView({
     onSearchChange,
     onTypeFilterChange,
     formatDuration,
+    formatLiveDuration,
 }: ParticipantBreakdownViewProps) {
     return (
         <div className="space-y-4">
@@ -448,11 +507,18 @@ function ParticipantBreakdownView({
                                             <div className="flex items-center gap-4 ml-4">
                                                 <div className="text-right">
                                                     <p className="text-xs font-semibold text-foreground">
-                                                        {formatDuration(activity.total_minutes)}
+                                                        {activity.is_currently_active && activity.last_checkin
+                                                            ? formatLiveDuration(activity.last_checkin, null, activity.total_minutes)
+                                                            : formatDuration(activity.total_minutes)}
                                                     </p>
-                                                    <p className="text-xs text-muted-foreground">
-                                                        {activity.checkin_count}x
-                                                    </p>
+                                                    <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
+                                                        <span>{activity.checkin_count}x</span>
+                                                        {activity.is_currently_active && (
+                                                            <span className="rounded-full bg-success/15 px-2 py-0.5 font-semibold text-success">
+                                                                In progress
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
