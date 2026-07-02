@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import {
     Clock, Users, TrendingUp, Activity, Search, Filter, Download,
-    BarChart3, Award, Zap, Timer,
+    BarChart3, Award, Zap, Timer, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -44,8 +44,9 @@ interface ActivityEngagementData {
 
 export default function ActivityTimeAnalytics() {
     const { user } = useAuth();
-    const { eventId } = useEvent();
+    const { activeEvent } = useEvent();
     const { toast } = useToast();
+    const eventId = activeEvent?.id ?? "";
 
     const [view, setView] = useState<"participants" | "activities">("participants");
     const [loading, setLoading] = useState(true);
@@ -56,36 +57,75 @@ export default function ActivityTimeAnalytics() {
     const [participants, setParticipants] = useState<ParticipantData[]>([]);
     const [activities, setActivities] = useState<ActivityEngagementData[]>([]);
 
+    const withTimeout = async <T,>(promise: Promise<T>, timeoutMs = 12000): Promise<T> => {
+        return await new Promise<T>((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                reject(new Error("Analytics request timed out. Please retry."));
+            }, timeoutMs);
+
+            promise
+                .then((result) => {
+                    clearTimeout(timeoutId);
+                    resolve(result);
+                })
+                .catch((error) => {
+                    clearTimeout(timeoutId);
+                    reject(error);
+                });
+        });
+    };
+
     useEffect(() => {
-        if (!eventId || !user) return;
+        if (!user) {
+            setLoading(false);
+            return;
+        }
+        if (!eventId) {
+            setParticipants([]);
+            setActivities([]);
+            setLoading(false);
+            return;
+        }
         fetchData();
     }, [eventId, user]);
 
     const fetchData = async () => {
+        if (!eventId) {
+            setLoading(false);
+            return;
+        }
         try {
             setLoading(true);
 
             // Fetch simple participant data
-            const { data: participantData, error: participantError } = await supabase
-                .from("participants")
-                .select("id, name, participant_code, participant_type")
-                .eq("event_id", eventId);
+            const { data: participantData, error: participantError } = await withTimeout(
+                supabase
+                    .from("participants")
+                    .select("id, name, code, source")
+                    .eq("event_id", eventId)
+            );
 
             if (participantError) throw participantError;
 
             // Fetch all activity participation records
-            const { data: allParticipations, error: participationError } = await supabase
-                .from("activity_participation_time")
-                .select("id, event_id, participant_id, activity_id, checkin_time, checkout_time")
-                .eq("event_id", eventId);
+            const { data: allParticipationsRaw, error: participationError } = await withTimeout(
+                supabase
+                    .from("activity_participation_time")
+                    .select("id, event_id, participant_id, activity_id, checkin_time, checkout_time")
+                    .eq("event_id", eventId)
+            );
 
-            if (participationError) throw participationError;
+            // If time-tracking table is not yet available on an environment,
+            // keep the page usable instead of hard-failing.
+            const allParticipations = participationError ? [] : (allParticipationsRaw ?? []);
 
             // Fetch activities to get names
-            const { data: activitiesData, error: activitiesError } = await supabase
-                .from("activities")
-                .select("id, name")
-                .eq("event_id", eventId);
+            const { data: activitiesData, error: activitiesError } = await withTimeout(
+                supabase
+                    .from("activities")
+                    .select("id, name")
+                    .eq("event_id", eventId)
+            );
 
             if (activitiesError) throw activitiesError;
 
@@ -103,8 +143,8 @@ export default function ActivityTimeAnalytics() {
 
             if (participantData) {
                 for (const participant of participantData) {
-                    if (participant.participant_type) {
-                        types.add(participant.participant_type);
+                    if (participant.source) {
+                        types.add(participant.source);
                     }
 
                     // Get participations for this participant
@@ -148,8 +188,8 @@ export default function ActivityTimeAnalytics() {
                     processedParticipants.push({
                         participant_id: participant.id,
                         participant_name: participant.name,
-                        participant_code: participant.participant_code || "N/A",
-                        participant_type: participant.participant_type || "General",
+                        participant_code: participant.code || "N/A",
+                        participant_type: participant.source || "General",
                         activities: activitiesList.sort((a, b) => b.total_minutes - a.total_minutes),
                         total_minutes: totalMinutes,
                     });
@@ -288,6 +328,10 @@ export default function ActivityTimeAnalytics() {
                             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent mx-auto" />
                             <p className="text-muted-foreground">Loading analytics...</p>
                         </div>
+                    </div>
+                ) : !eventId ? (
+                    <div className="text-center py-12 text-muted-foreground">
+                        Select an active event to view time analytics.
                     </div>
                 ) : view === "participants" ? (
                     <ParticipantBreakdownView
@@ -583,7 +627,7 @@ function ActivityEngagementView({
 }
 
 interface StatCardProps {
-    icon: React.ReactNode;
+    icon: LucideIcon;
     label: string;
     value: string | number;
     color: "primary" | "blue" | "amber" | "green";
@@ -601,7 +645,7 @@ function StatCard({ icon: Icon, label, value, color }: StatCardProps) {
         <div className="p-4 rounded-xl border border-secondary hover:border-primary/30 transition-colors">
             <div className="flex items-center gap-2 mb-2">
                 <div className={cn("p-2 rounded-lg", colorClass)}>
-                    {typeof Icon === "function" ? <Icon className="h-4 w-4" /> : Icon}
+                    <Icon className="h-4 w-4" />
                 </div>
                 <p className="text-xs text-muted-foreground font-medium">{label}</p>
             </div>

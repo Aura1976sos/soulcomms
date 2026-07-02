@@ -12,6 +12,7 @@ import LiveEvent from "./pages/LiveEvent";
 import DisplayMode from "./pages/DisplayMode";
 import EventJoin from "./pages/EventJoin";
 import EventSlugJoin from "./pages/EventSlugJoin";
+import ActivityTimeAnalytics from "./pages/ActivityTimeAnalytics";
 
 // ── Lazy pages — each loaded only when first navigated to ─────────────────────
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -29,7 +30,6 @@ const StaffManagement = lazy(() => import("./pages/StaffManagement"));
 const Events = lazy(() => import("./pages/Events"));
 const Communications = lazy(() => import("./pages/Communications"));
 const SystemHealth = lazy(() => import("./pages/SystemHealth"));
-const ActivityTimeAnalytics = lazy(() => import("./pages/ActivityTimeAnalytics"));
 
 // ── Suspense wrapper helper ────────────────────────────────────────────────────
 function Lazy({ children }: { children: React.ReactNode }) {
