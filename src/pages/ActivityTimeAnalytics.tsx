@@ -94,6 +94,16 @@ export default function ActivityTimeAnalytics() {
             setLoading(false);
             return;
         }
+        const toMinutes = (checkinTime: string, checkoutTime?: string | null, durationMinutes?: number | null) => {
+            if (typeof durationMinutes === "number" && Number.isFinite(durationMinutes)) {
+                return Math.max(0, Math.round(durationMinutes));
+            }
+
+            const start = new Date(checkinTime).getTime();
+            const end = checkoutTime ? new Date(checkoutTime).getTime() : Date.now();
+            return Math.max(0, Math.round((end - start) / 60000));
+        };
+
         try {
             setLoading(true);
 
@@ -111,7 +121,7 @@ export default function ActivityTimeAnalytics() {
             const { data: allParticipationsRaw, error: participationError } = await withTimeout(
                 supabase
                     .from("activity_participation_time")
-                    .select("id, event_id, participant_id, activity_id, checkin_time, checkout_time")
+                    .select("id, event_id, participant_id, activity_id, checkin_time, checkout_time, duration_minutes")
                     .eq("event_id", eventId)
             );
 
@@ -167,14 +177,11 @@ export default function ActivityTimeAnalytics() {
 
                         const data = activityActivityMap.get(participation.activity_id)!;
                         data.count += 1;
-
-                        // Calculate duration
-                        if (participation.checkout_time && participation.checkin_time) {
-                            const checkoutTime = new Date(participation.checkout_time).getTime();
-                            const checkinTime = new Date(participation.checkin_time).getTime();
-                            const minutes = Math.round((checkoutTime - checkinTime) / 60000);
-                            data.minutes += Math.max(0, minutes); // Ensure non-negative
-                        }
+                        data.minutes += toMinutes(
+                            participation.checkin_time,
+                            participation.checkout_time,
+                            participation.duration_minutes
+                        );
                     }
 
                     const activitiesList = Array.from(activityActivityMap.entries()).map(([_, data]) => ({
@@ -224,14 +231,7 @@ export default function ActivityTimeAnalytics() {
                     const data = engagementMap.get(activityId)!;
                     data.participants.add(record.participant_id);
                     data.checkins += 1;
-
-                    // Calculate duration
-                    if (record.checkout_time && record.checkin_time) {
-                        const checkoutTime = new Date(record.checkout_time).getTime();
-                        const checkinTime = new Date(record.checkin_time).getTime();
-                        const minutes = Math.round((checkoutTime - checkinTime) / 60000);
-                        data.totalMinutes += Math.max(0, minutes); // Ensure non-negative
-                    }
+                    data.totalMinutes += toMinutes(record.checkin_time, record.checkout_time, record.duration_minutes);
                 }
             }
 
