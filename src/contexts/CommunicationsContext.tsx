@@ -15,15 +15,15 @@ interface CommunicationsState {
 const CommunicationsContext = createContext<CommunicationsState>({
   totalUnread: 0,
   mentionCount: 0,
-  markChannelRead: async () => {},
-  refreshUnread: async () => {},
+  markChannelRead: async () => { },
+  refreshUnread: async () => { },
 });
 
 export const useCommunications = () => useContext(CommunicationsContext);
 
 export const CommunicationsProvider = ({ children }: { children: ReactNode }) => {
   const { user } = useAuth();
-  const [totalUnread, setTotalUnread]   = useState(0);
+  const [totalUnread, setTotalUnread] = useState(0);
   const [mentionCount, setMentionCount] = useState(0);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
@@ -31,7 +31,7 @@ export const CommunicationsProvider = ({ children }: { children: ReactNode }) =>
     if (!user?.id) return;
     if (!navigator.onLine) return;  // skip when offline — avoid failed DB calls
     try {
-      // Count unread: messages newer than last_read_at per channel
+      // Load memberships and last-read markers
       const { data: memberships } = await supabase
         .from("comm_channel_members")
         .select("channel_id, last_read_at")
@@ -39,20 +39,29 @@ export const CommunicationsProvider = ({ children }: { children: ReactNode }) =>
 
       if (!memberships?.length) { setTotalUnread(0); return; }
 
-      // Run all per-channel count queries in parallel — not sequentially
-      const unreadCounts = await Promise.all(
-        memberships.map(m =>
-          supabase
-            .from("comm_messages")
-            .select("id", { count: "exact", head: true })
-            .eq("channel_id", m.channel_id)
-            .eq("is_deleted", false)
-            .neq("sender_id", user.id)
-            .gt("created_at", m.last_read_at ?? "1970-01-01")
-            .then(r => r.count ?? 0)
-        )
-      );
-      const unread = unreadCounts.reduce((a, b) => a + b, 0);
+      const channelIds = memberships.map((m) => m.channel_id);
+      const lastReadByChannel = new Map<string, string>();
+      memberships.forEach((m) => lastReadByChannel.set(m.channel_id, m.last_read_at ?? "1970-01-01"));
+      const oldestLastRead = memberships.reduce((oldest, m) => {
+        const ts = m.last_read_at ?? "1970-01-01";
+        return ts < oldest ? ts : oldest;
+      }, "9999-12-31");
+
+      // Single batched query instead of one request per channel.
+      const { data: recentMessages } = await supabase
+        .from("comm_messages")
+        .select("channel_id, created_at")
+        .in("channel_id", channelIds)
+        .eq("is_deleted", false)
+        .neq("sender_id", user.id)
+        .gt("created_at", oldestLastRead)
+        .order("created_at", { ascending: false })
+        .limit(5000);
+
+      const unread = (recentMessages ?? []).reduce((sum, msg) => {
+        const lastRead = lastReadByChannel.get(msg.channel_id) ?? "1970-01-01";
+        return msg.created_at > lastRead ? sum + 1 : sum;
+      }, 0);
       setTotalUnread(unread);
 
       // Mention count

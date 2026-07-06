@@ -40,16 +40,16 @@ const AuthContext = createContext<AuthContextType>({
   user: null, session: null, profile: null, role: null,
   loading: true, profileReady: false, isOfflineSession: false,
   signIn: async () => ({ error: null }),
-  signOut: async () => {},
+  signOut: async () => { },
 });
 
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser]               = useState<User | null>(null);
-  const [session, setSession]         = useState<Session | null>(null);
-  const [profile, setProfile]         = useState<StaffProfile | null>(null);
-  const [loading, setLoading]         = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<StaffProfile | null>(null);
+  const [loading, setLoading] = useState(true);
   const [profileReady, setProfileReady] = useState(false);
   const [isOfflineSession, setIsOfflineSession] = useState(false);
 
@@ -69,6 +69,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     let mounted = true;
+
+    const syncAutoRefreshWithNetwork = () => {
+      try {
+        if (navigator.onLine) {
+          supabase.auth.startAutoRefresh();
+        } else {
+          supabase.auth.stopAutoRefresh();
+        }
+      } catch {
+        // Best-effort network-aware auth refresh control
+      }
+    };
+
+    // Avoid repeated refresh-token network failures while offline
+    syncAutoRefreshWithNetwork();
+    window.addEventListener("online", syncAutoRefreshWithNetwork);
+    window.addEventListener("offline", syncAutoRefreshWithNetwork);
 
     // Apply a session — shared by the initial getSession() read and later auth changes
     const applySession = (newSession: Session | null) => {
@@ -131,6 +148,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     return () => {
       mounted = false;
+      window.removeEventListener("online", syncAutoRefreshWithNetwork);
+      window.removeEventListener("offline", syncAutoRefreshWithNetwork);
       subscription.unsubscribe();
     };
   }, []);
@@ -198,11 +217,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setProfileReady(false);
 
     // Always clear local Supabase session (no network needed)
-    await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+    await supabase.auth.signOut({ scope: "local" }).catch(() => { });
 
     // Also invalidate the server session if online
     if (navigator.onLine) {
-      supabase.auth.signOut().catch(() => {});
+      supabase.auth.signOut().catch(() => { });
     }
 
     // Don't clear the offline credential cache on signOut —
