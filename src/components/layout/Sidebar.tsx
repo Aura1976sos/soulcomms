@@ -22,8 +22,8 @@ const navGroups = [
     label: "Operations",
     items: [
       { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", roles: ["admin", "checkin_officer", "activity_coordinator"] },
-      { to: "/checkin", icon: ScanLine, label: "Check-In Station", roles: ["admin", "checkin_officer"] },
-      { to: "/activity", icon: Zap, label: "Activity Recorder", roles: ["admin", "activity_coordinator"] },
+      { to: "/checkin", icon: ScanLine, label: "Check-In Station", roles: ["admin", "checkin_officer", "activity_coordinator"] },
+      { to: "/activity", icon: Zap, label: "Activity Recorder", roles: ["admin", "checkin_officer", "activity_coordinator"] },
       { to: "/communications", icon: MessageSquare, label: "Communications", roles: ["admin", "event_admin", "checkin_officer", "activity_coordinator", "crew_manager", "sp_manager", "viewer"] },
     ],
   },

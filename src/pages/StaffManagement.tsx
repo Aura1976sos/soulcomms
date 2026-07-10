@@ -37,6 +37,8 @@ interface AuditLog {
   created_at: string;
 }
 
+type FunctionErrorWithContext = Error & { context?: Response };
+
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 const timeAgo = (iso: string | null | undefined) => {
   if (!iso) return "Never";
@@ -58,6 +60,25 @@ const isOnline = (s: StaffMember) => {
   const t = s.last_seen_at;
   if (!t) return false;
   return Date.now() - new Date(t).getTime() < 30 * 60 * 1000;
+};
+
+const parseFunctionInvokeError = async (err: unknown): Promise<string> => {
+  const fallback = err instanceof Error ? err.message : String(err);
+  const withContext = err as FunctionErrorWithContext;
+  const res = withContext?.context;
+  if (!res) return fallback;
+
+  try {
+    const body = await res.clone().json() as { error?: string; message?: string };
+    return body.error || body.message || fallback;
+  } catch {
+    try {
+      const text = await res.clone().text();
+      return text || fallback;
+    } catch {
+      return fallback;
+    }
+  }
 };
 
 const ACTION_LABELS: Record<string, { label: string; color: string }> = {
@@ -280,20 +301,21 @@ export default function StaffManagement() {
     try {
       const { data, error } = await supabase.functions.invoke("create-staff", {
         body: {
-          name: createForm.name, email: createForm.email,
+          name: createForm.name.trim(), email: createForm.email.trim().toLowerCase(),
           password: createForm.password, role: createForm.role,
-          phone: createForm.phone || null,
+          phone: createForm.phone.trim() || null,
           assigned_event_id: createForm.assigned_event_id || null,
         },
       });
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(await parseFunctionInvokeError(error));
       if (data?.error) throw new Error(data.error);
       setJustCreated(createForm.email);
       setCreateForm({ name: "", email: "", password: "", phone: "", role: "", assigned_event_id: "" });
       await fetchStaff();
       toast({ title: "Staff account created!" });
     } catch (err) {
-      toast({ title: "Failed to create staff", description: String(err), variant: "destructive" });
+      const msg = err instanceof Error ? err.message : String(err);
+      toast({ title: "Failed to create staff", description: msg, variant: "destructive" });
     } finally {
       setCreating(false);
     }

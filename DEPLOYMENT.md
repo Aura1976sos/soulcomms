@@ -97,3 +97,49 @@ pnpm run preview
 2. ✅ Enable GitHub Pages
 3. ✅ Add repository secrets
 4. ✅ View live at https://Aura1976sos.github.io/Soulcomms
+
+---
+
+## cPanel Auto Deploy (Subdomain)
+
+This repo now includes a workflow at [.github/workflows/deploy-cpanel.yml](.github/workflows/deploy-cpanel.yml) that auto deploys to cPanel whenever you push to `main`.
+
+### 1) Create subdomain in cPanel
+
+1. Login to cPanel.
+2. Open **Domains** or **Subdomains**.
+3. Create your subdomain (example: `app.soulcomms.com`).
+4. Note its document root path (example: `/public_html/app.soulcomms.com/`).
+
+### 2) Create FTP account for that subdomain path
+
+1. In cPanel, open **FTP Accounts**.
+2. Create a deployment account restricted to the subdomain document root.
+3. Keep these values: host, username, password, port.
+
+### 3) Add GitHub Actions secrets
+
+In GitHub repo settings, open **Settings → Secrets and variables → Actions** and add:
+
+1. `CPANEL_FTP_HOST`
+  Value example: `ftp.soulcomms.com`
+2. `CPANEL_FTP_USERNAME`
+  Value: your cPanel FTP username
+3. `CPANEL_FTP_PASSWORD`
+  Value: your cPanel FTP password
+4. `CPANEL_FTP_PORT`
+  Value example: `21`
+5. `CPANEL_REMOTE_DIR`
+  Value example: `/public_html/app.soulcomms.com/`
+
+### 4) Push to main
+
+Every push to `main` will now:
+
+1. Install dependencies
+2. Build with `npm run build:prod`
+3. Upload `dist/` to your cPanel subdomain folder
+
+### 5) SPA routing support
+
+For React Router deep links to work on cPanel, this project includes [public/.htaccess](public/.htaccess), which is copied into `dist/` during build.
