@@ -91,6 +91,29 @@ function parseStandardRows(lines: string[]): ParticipantRow[] {
     .filter(r => r.code || r.name);
 }
 
+/**
+ * Parse pasted manual entries.
+ * Accepts one row per line with fields separated by comma, tab, or pipe:
+ * Code, Name, Phone
+ */
+function parseBulkManualRows(text: string): ParticipantRow[] {
+  return text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const delim = line.includes("\t") ? "\t" : line.includes("|") ? "|" : ",";
+      const cols = line.split(delim).map(c => c.trim().replace(/^"|"$/g, ""));
+      return {
+        code: cols[0] ?? "",
+        name: cols[1] ?? "",
+        phone: cols[2] ?? "",
+        qr_link: "",
+      };
+    })
+    .filter(r => r.code || r.name);
+}
+
 // ─── Validation ───────────────────────────────────────────────────────
 function validateRow(r: ParticipantRow, idx: number): RowError | null {
   const errors: string[] = [];
@@ -117,6 +140,7 @@ export default function ImportParticipants() {
   const [manualCode, setManualCode] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualPhone, setManualPhone] = useState("");
+  const [manualBulkText, setManualBulkText] = useState("");
 
   // ── Get next available code from DB ────────────────────────────────
   const getNextCode = useCallback(async (count: number): Promise<string[]> => {
@@ -314,6 +338,34 @@ export default function ImportParticipants() {
     }
     setQueue(prev => [...prev, { code, name: manualName.trim(), phone: manualPhone.trim(), qr_link: "" }]);
     setManualCode(""); setManualName(""); setManualPhone("");
+  };
+
+  const handleBulkManualAdd = () => {
+    if (!manualBulkText.trim()) return;
+
+    const rows = parseBulkManualRows(manualBulkText);
+    if (rows.length === 0) {
+      toast({ title: "No manual rows found", variant: "destructive" });
+      return;
+    }
+
+    setQueue(prev => {
+      const existingCodes = new Set(prev.map(r => r.code));
+      const fresh = rows.filter(r => !existingCodes.has(r.code));
+      if (fresh.length < rows.length) {
+        toast({
+          title: `${rows.length - fresh.length} duplicate codes skipped`,
+          description: "Only new rows were added to the queue.",
+        });
+      }
+      return [...prev, ...fresh];
+    });
+
+    toast({
+      title: `${rows.length} manual rows loaded`,
+      description: "Review the queue, then click Import.",
+    });
+    setManualBulkText("");
   };
 
   const downloadTemplate = () => {
@@ -555,6 +607,34 @@ export default function ImportParticipants() {
               >
                 <Plus className="h-4 w-4" /> Add to Queue
               </Button>
+
+              <div className="mt-6 border-t border-border pt-5">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Bulk Add Manual</h4>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Paste one participant per line using <span className="font-mono text-foreground">Code, Name, Phone</span>.
+                  Commas, tabs, or pipes are supported.
+                </p>
+                <textarea
+                  value={manualBulkText}
+                  onChange={e => setManualBulkText(e.target.value)}
+                  placeholder={"0001, Ada Obi, 08031234567\n0002, Kunle Adebayo, 08051234567"}
+                  rows={5}
+                  className="mt-3 w-full rounded-xl border border-border bg-secondary px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                />
+                <div className="flex flex-wrap items-center gap-3 mt-3">
+                  <Button
+                    onClick={handleBulkManualAdd}
+                    disabled={!manualBulkText.trim()}
+                    variant="outline"
+                    className="gap-2 border-border"
+                  >
+                    <Users className="h-4 w-4" /> Bulk Add Manual
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    New rows are appended to the queue before import.
+                  </span>
+                </div>
+              </div>
             </div>
 
             {/* ── QUEUE ── */}
