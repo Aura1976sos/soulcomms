@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { QrScannerModal } from "@/components/checkin/QrScannerModal";
 import {
   CheckCircle, XCircle, RotateCcw, Zap, QrCode,
-  MessageSquare, Phone, User, Hash, CheckCircle2,
+  MessageSquare, Phone, User, Hash, CheckCircle2, ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -63,6 +63,14 @@ interface LocalParticipantRecord extends FoundParticipant {
   is_walkin?: boolean;
 }
 
+interface BulkRecordResult {
+  processed: number;
+  recorded: number;
+  alreadyRecorded: number;
+  notFound: string[];
+  notCheckedIn: string[];
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function withTimeout<T>(promise: Promise<T>, ms = 8000): Promise<T> {
   return Promise.race([
@@ -85,6 +93,10 @@ function candidateCodes(raw: string): string[] {
     if (suffix && suffix.length <= 6) { set.add(suffix); set.add(suffix.padStart(4, "0")); }
   }
   return [...set].filter(Boolean);
+}
+
+function parseBulkCodes(raw: string): string[] {
+  return [...new Set(raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean))];
 }
 
 function formatSessionTimeRange(start: string, end: string): string {
@@ -274,6 +286,11 @@ export default function ActivityRecorder() {
   const [recordingActivityId, setRecordingActivityId] = useState<string | null>(null);
   const [sessionsByActivity, setSessionsByActivity] = useState<Record<string, ActivitySessionDisplay[]>>({});
   const localParticipantsRef = useRef<LocalParticipantRecord[]>([]);
+  const [showBulkRecorder, setShowBulkRecorder] = useState(false);
+  const [bulkCodes, setBulkCodes] = useState("");
+  const [bulkActivityId, setBulkActivityId] = useState("");
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkRecordResult | null>(null);
 
   const { user } = useAuth();
   const { activeEvent } = useEvent();
@@ -346,6 +363,12 @@ export default function ActivityRecorder() {
       return acc;
     }, {});
   const categories = Object.keys(grouped);
+
+  useEffect(() => {
+    if (!bulkActivityId && activeActivities.length > 0) {
+      setBulkActivityId(activeActivities[0].id);
+    }
+  }, [bulkActivityId, activeActivities]);
 
   useEffect(() => {
     const loadSessions = async () => {
@@ -575,6 +598,170 @@ export default function ActivityRecorder() {
       setLoading(false);
     }
   }, [online, eventId, applyParticipantSelection]);
+
+  const resolveParticipantForBulk = useCallback(async (raw: string): Promise<FoundParticipant | null> => {
+    const trimmed = raw.trim();
+    if (!trimmed || !eventId) return null;
+
+    const localMatch = searchLocalParticipant(localParticipantsRef.current, trimmed, eventId);
+    if (localMatch) return localMatch;
+
+    if (!online) {
+      const cached = await offlineLookupParticipant(trimmed, eventId);
+      return cached
+        ? { id: cached.id, code: cached.code, name: cached.name, phone: cached.phone, is_checked_in: cached.is_checked_in }
+        : null;
+    }
+
+    return lookupParticipantOnline(trimmed, eventId);
+  }, [eventId, online]);
+
+  const handleBulkRecord = useCallback(async () => {
+    if (!eventId || bulkProcessing) return;
+    const activity = activeActivities.find(a => a.id === bulkActivityId);
+    if (!activity) {
+      setErrorMsg("Select an activity for bulk recording.");
+      return;
+    }
+    if (!isGuestMode && activeEvent?.status === "completed") {
+      setErrorMsg("This event is closed. Activity timing is no longer accepting new records.");
+      setFindStatus("error");
+      return;
+    }
+
+    const inputs = parseBulkCodes(bulkCodes);
+    if (inputs.length === 0) {
+      setErrorMsg("Enter at least one participant code, name, phone, or QR link.");
+      return;
+    }
+
+    setBulkProcessing(true);
+    setBulkResult(null);
+    setErrorMsg("");
+
+    try {
+      const notFound: string[] = [];
+      const notCheckedIn: string[] = [];
+      const foundMap = new Map<string, FoundParticipant>();
+
+      for (const raw of inputs) {
+        const participant = await resolveParticipantForBulk(raw);
+        if (!participant) {
+          notFound.push(raw);
+          continue;
+        }
+        if (!participant.is_checked_in) {
+          notCheckedIn.push(`${participant.name} (#${participant.code})`);
+          continue;
+        }
+        if (!foundMap.has(participant.id)) {
+          foundMap.set(participant.id, participant);
+        }
+      }
+
+      const found = [...foundMap.values()];
+      let recorded = 0;
+      let alreadyRecorded = 0;
+      const now = new Date().toISOString();
+
+      if (found.length > 0) {
+        if (online) {
+          const ids = found.map(p => p.id);
+          const { data: existingRows, error: existingError } = await withTimeout(
+            supabase.from("activity_logs").select("participant_id")
+              .eq("event_id", eventId)
+              .eq("activity_id", activity.id)
+              .in("participant_id", ids)
+          );
+          if (existingError) throw existingError;
+
+          const existingSet = new Set((existingRows ?? []).map(r => String(r.participant_id)));
+          alreadyRecorded = existingSet.size;
+          const toInsert = found.filter(p => !existingSet.has(p.id));
+
+          if (toInsert.length > 0) {
+            const { error: insertError } = await withTimeout(
+              supabase.from("activity_logs").insert(
+                toInsert.map(p => ({
+                  participant_id: p.id,
+                  participant_code: p.code,
+                  experience: activity.code,
+                  activity_id: activity.id,
+                  points_awarded: activity.points_value,
+                  recorded_by: user?.id ?? null,
+                  event_id: eventId,
+                  recorded_at: now,
+                }))
+              )
+            );
+            if (insertError) throw insertError;
+            await Promise.all(toInsert.map(p => recordActivityCheckin(eventId, p.id, activity.id)));
+            recorded = toInsert.length;
+          }
+        } else {
+          for (const participant of found) {
+            const alreadyQueued = await localActivityCheck(participant.id, activity.id);
+            if (alreadyQueued) {
+              alreadyRecorded++;
+              continue;
+            }
+            await queueMutation("activity_log", {
+              participant_id: participant.id,
+              participant_code: participant.code,
+              experience: activity.code,
+              activity_id: activity.id,
+              points_awarded: activity.points_value,
+              recorded_by: user?.id ?? null,
+              event_id: eventId,
+              recorded_at: now,
+            });
+            recorded++;
+          }
+          if (recorded > 0) await refreshPending();
+        }
+      }
+
+      if (recorded > 0) {
+        setSessionCount(c => c + recorded);
+        speak(VM.activity_success);
+        trackEvent("activity_bulk_recorded", {
+          eventType: "conversion",
+          properties: {
+            mode: online ? "online" : "offline",
+            count: recorded,
+            activity_code: activity.code,
+          },
+        });
+      }
+
+      setBulkResult({
+        processed: inputs.length,
+        recorded,
+        alreadyRecorded,
+        notFound,
+        notCheckedIn,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Bulk record failed";
+      setErrorMsg(msg.includes("timed out") ? "Request timed out. Check connection." : msg);
+      setFindStatus("error");
+    } finally {
+      setBulkProcessing(false);
+    }
+  }, [
+    eventId,
+    bulkProcessing,
+    activeActivities,
+    bulkActivityId,
+    isGuestMode,
+    activeEvent,
+    bulkCodes,
+    resolveParticipantForBulk,
+    online,
+    activity,
+    user,
+    refreshPending,
+  ]);
 
   // ── Direct record for all activities ────────────────────────────────────────
   const directRecord = useCallback(async (activity: Activity, session?: ActivitySessionDisplay) => {
@@ -946,8 +1133,72 @@ export default function ActivityRecorder() {
                   >
                     <QrCode className="h-4 w-4" />Open Scanner
                   </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowBulkRecorder(v => !v)}
+                    disabled={loading || activeActivities.length === 0}
+                    className="h-12 font-bold uppercase tracking-wider gap-2"
+                  >
+                    <ListChecks className="h-4 w-4" />{showBulkRecorder ? "Hide Bulk Recorder" : "Bulk Activity Record"}
+                  </Button>
                 </div>
               </div>
+
+              {showBulkRecorder && (
+                <div className="mt-4 rounded-xl border border-border bg-secondary/20 p-3 space-y-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[2px] text-muted-foreground">Bulk Record Activity</p>
+                  <select
+                    value={bulkActivityId}
+                    onChange={(e) => setBulkActivityId(e.target.value)}
+                    className="w-full h-11 rounded-lg border border-border bg-secondary px-3 text-sm text-foreground"
+                  >
+                    {activeActivities.map(a => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                  <textarea
+                    value={bulkCodes}
+                    onChange={e => setBulkCodes(e.target.value)}
+                    rows={5}
+                    placeholder="#0245\n#0246\n#0247"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-xs font-mono text-foreground placeholder:text-muted-foreground/40 resize-y"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => { setBulkCodes(""); setBulkResult(null); }}
+                      disabled={bulkProcessing}
+                      className="flex-1"
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => { void handleBulkRecord(); }}
+                      disabled={bulkProcessing || !bulkCodes.trim() || !bulkActivityId}
+                      className="flex-1"
+                    >
+                      {bulkProcessing ? "Recording…" : "Record For All"}
+                    </Button>
+                  </div>
+
+                  {bulkResult && (
+                    <div className="rounded-lg border border-border bg-background/40 p-2 space-y-1 text-[11px]">
+                      <p className="text-foreground font-semibold">
+                        Processed {bulkResult.processed} • Recorded {bulkResult.recorded} • Already {bulkResult.alreadyRecorded}
+                      </p>
+                      {bulkResult.notCheckedIn.length > 0 && (
+                        <p className="text-amber-500">Not checked-in: {bulkResult.notCheckedIn.length}</p>
+                      )}
+                      {bulkResult.notFound.length > 0 && (
+                        <p className="text-destructive">Not found: {bulkResult.notFound.length}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {(suggestionsLoading || suggestions.length > 0 || (query.trim().length >= 2 && !loading)) && (
                 <div className="mt-4 rounded-xl border border-border bg-secondary/30 p-2 space-y-1">

@@ -16,6 +16,33 @@ export type StaffRole =
   | "sp_manager"
   | "viewer";
 
+const normalizeStaffRole = (role: string | null | undefined): StaffRole => {
+  const v = (role ?? "").toLowerCase().trim();
+
+  if (v === "admin") return "admin";
+  if (v === "event_admin") return "event_admin";
+  if (v === "checkin_officer") return "checkin_officer";
+  if (v === "activity_coordinator") return "activity_coordinator";
+  if (v === "crew_manager") return "crew_manager";
+  if (v === "sp_manager") return "sp_manager";
+  if (v === "viewer") return "viewer";
+
+  // Backward/alias support for merged role naming variants.
+  if (
+    v === "staff" ||
+    v === "checkin_activity_recorder" ||
+    v === "checkin_and_activity_recorder" ||
+    v === "check-in & activity recorder" ||
+    v === "check-in and activity recorder" ||
+    v === "checkin & activity recorder" ||
+    v === "checkin and activity recorder"
+  ) {
+    return "checkin_officer";
+  }
+
+  return "viewer";
+};
+
 interface StaffProfile {
   id: string;
   name: string;
@@ -61,7 +88,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         .select("id, name, role, status, assigned_event_id")
         .eq("id", userId)
         .maybeSingle();
-      return data as StaffProfile | null;
+      if (!data) return null;
+      return {
+        id: data.id,
+        name: data.name,
+        role: normalizeStaffRole((data as { role?: string | null }).role),
+        status: data.status,
+        assigned_event_id: data.assigned_event_id,
+      } as StaffProfile;
     } catch {
       return null;
     }
@@ -119,7 +153,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         if (!profileData) {
           const offlineEntry = await getOfflineAuthByUserId(newSession.user.id);
           if (offlineEntry) {
-            profileData = offlineEntry.profile as StaffProfile;
+            const cached = offlineEntry.profile as StaffProfile;
+            profileData = {
+              ...cached,
+              role: normalizeStaffRole(cached.role),
+            };
             if (mounted) setIsOfflineSession(true);
           }
         } else {
@@ -185,14 +223,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       if (cached) {
         const syntheticUser = { id: cached.userId, email: cached.email } as User;
+        const normalizedCachedProfile = {
+          ...(cached.profile as StaffProfile),
+          role: normalizeStaffRole(cached.profile.role),
+        };
         setUser(syntheticUser);
-        setProfile(cached.profile as StaffProfile);
+        setProfile(normalizedCachedProfile);
         setIsOfflineSession(true);
         setProfileReady(true);
         setLoading(false);
         trackEvent("user_login", {
           eventType: "conversion",
-          properties: { role: cached.profile.role, method: "offline" },
+          properties: { role: normalizedCachedProfile.role, method: "offline" },
         });
         return { error: null };
       }
