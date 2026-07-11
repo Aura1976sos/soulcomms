@@ -76,6 +76,8 @@ type ActivityLogRow = {
     recorded_at: string | null;
 };
 
+const REQUEST_TIMEOUT_MS = 30000;
+
 export default function ActivityTimeAnalytics() {
     const { user } = useAuth();
     const { activeEvent, setActiveEvent } = useEvent();
@@ -101,7 +103,7 @@ export default function ActivityTimeAnalytics() {
     const [participationRows, setParticipationRows] = useState<ParticipationRow[]>([]);
     const [activityLogRows, setActivityLogRows] = useState<ActivityLogRow[]>([]);
 
-    const withTimeout = async (promise: PromiseLike<any> | any, timeoutMs = 12000): Promise<any> => {
+    const withTimeout = async (promise: PromiseLike<any> | any, timeoutMs = REQUEST_TIMEOUT_MS): Promise<any> => {
         return await new Promise<any>((resolve, reject) => {
             const timeoutId = setTimeout(() => {
                 reject(new Error("Request timed out"));
@@ -117,6 +119,16 @@ export default function ActivityTimeAnalytics() {
                     reject(error);
                 });
         });
+    };
+
+    const runWithTimeoutRetry = async <T,>(requestFactory: () => Promise<T>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
+        try {
+            return await withTimeout(requestFactory(), timeoutMs) as T;
+        } catch (error) {
+            const isTimeout = error instanceof Error && error.message === "Request timed out";
+            if (!isTimeout) throw error;
+            return await withTimeout(requestFactory(), timeoutMs) as T;
+        }
     };
 
     useEffect(() => {
@@ -346,45 +358,46 @@ export default function ActivityTimeAnalytics() {
         try {
             setLoading(true);
 
-            // Fetch simple participant data
-            const { data: participantData, error: participantError } = await withTimeout(
-                (supabase as any)
-                    .from("participants")
-                    .select("id, name, code, source")
-                    .eq("event_id", eventId)
-            );
+            const [participantRes, participationRes, activitiesRes, activityLogsRes] = await Promise.all([
+                runWithTimeoutRetry(() =>
+                    (supabase as any)
+                        .from("participants")
+                        .select("id, name, code, source")
+                        .eq("event_id", eventId)
+                ),
+                runWithTimeoutRetry(() =>
+                    (supabase as any)
+                        .from("activity_participation_time")
+                        .select("id, event_id, participant_id, activity_id, checkin_time, checkout_time, duration_minutes")
+                        .eq("event_id", eventId)
+                ),
+                runWithTimeoutRetry(() =>
+                    (supabase as any)
+                        .from("activities")
+                        .select("id, name")
+                        .eq("event_id", eventId)
+                ),
+                runWithTimeoutRetry(() =>
+                    (supabase as any)
+                        .from("activity_logs")
+                        .select("participant_id, activity_id, recorded_at")
+                        .eq("event_id", eventId)
+                ),
+            ]);
 
+            const { data: participantData, error: participantError } = participantRes as { data: unknown[] | null; error: Error | null };
             if (participantError) throw participantError;
 
-            // Fetch all activity participation records
-            const { data: allParticipationsRaw, error: participationError } = await withTimeout(
-                (supabase as any)
-                    .from("activity_participation_time")
-                    .select("id, event_id, participant_id, activity_id, checkin_time, checkout_time, duration_minutes")
-                    .eq("event_id", eventId)
-            );
+            const { data: allParticipationsRaw, error: participationError } = participationRes as { data: unknown[] | null; error: Error | null };
 
             // If time-tracking table is not yet available on an environment,
             // keep the page usable instead of hard-failing.
             const allParticipations = participationError ? [] : (allParticipationsRaw ?? []);
 
-            // Fetch activities to get names
-            const { data: activitiesData, error: activitiesError } = await withTimeout(
-                (supabase as any)
-                    .from("activities")
-                    .select("id, name")
-                    .eq("event_id", eventId)
-            );
-
+            const { data: activitiesData, error: activitiesError } = activitiesRes as { data: unknown[] | null; error: Error | null };
             if (activitiesError) throw activitiesError;
 
-            const { data: activityLogsData, error: activityLogsError } = await withTimeout(
-                (supabase as any)
-                    .from("activity_logs")
-                    .select("participant_id, activity_id, recorded_at")
-                    .eq("event_id", eventId)
-            );
-
+            const { data: activityLogsData, error: activityLogsError } = activityLogsRes as { data: unknown[] | null; error: Error | null };
             if (activityLogsError) throw activityLogsError;
 
             setParticipantRows((participantData ?? []) as ParticipantRow[]);
