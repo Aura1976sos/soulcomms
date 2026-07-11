@@ -28,6 +28,13 @@ export interface ActivityTimeStatistics {
     total_time_hours: number;
 }
 
+const isMissingActivityParticipationTableError = (error: unknown) => {
+    if (!error || typeof error !== 'object') return false;
+    const code = 'code' in error ? (error as { code?: string }).code : undefined;
+    const message = 'message' in error ? String((error as { message?: unknown }).message ?? '') : '';
+    return code === 'PGRST205' && message.includes("activity_participation_time");
+};
+
 /**
  * Record a participant checking into an activity
  * Automatically closes any previous activity checkout
@@ -225,7 +232,16 @@ export async function stopAllEventActivityTimers(
                 .is('checkout_time', null)
                 .select('id');
 
-            if (fallbackError) throw fallbackError;
+            if (fallbackError) {
+                if (isMissingActivityParticipationTableError(fallbackError)) {
+                    return {
+                        success: true,
+                        stoppedCount: 0,
+                        message: 'No active timer table in this environment. Event can still be closed.',
+                    };
+                }
+                throw fallbackError;
+            }
 
             return {
                 success: true,
@@ -240,6 +256,13 @@ export async function stopAllEventActivityTimers(
             message: data?.[0]?.message ?? 'Unknown response',
         };
     } catch (err) {
+        if (isMissingActivityParticipationTableError(err)) {
+            return {
+                success: true,
+                stoppedCount: 0,
+                message: 'No active timer table in this environment. Event can still be closed.',
+            };
+        }
         console.error('Error stopping all event activity timers:', err);
         return {
             success: false,
