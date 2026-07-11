@@ -88,6 +88,93 @@ function withTimeout<T>(promise: Promise<T>, ms = 8000): Promise<T> {
   ]);
 }
 
+async function findParticipantOnlineByQrOrCode(raw: string, eventId: string, method: InputMethod) {
+  const trimmed = raw.trim();
+  const padded = /^\d+$/.test(trimmed) ? trimmed.padStart(4, "0") : trimmed;
+
+  if (method === "qr") {
+    const { data: qrData, error: qrError } = await withTimeout(
+      supabase.from("participants")
+        .select("id, code, name, phone, is_checked_in")
+        .eq("event_id", eventId)
+        .eq("qr_link", trimmed)
+        .limit(1)
+        .maybeSingle()
+    );
+    if (qrError) throw new Error(qrError.message);
+    if (qrData) return qrData;
+  }
+
+  const { data, error } = await withTimeout(
+    supabase.from("participants")
+      .select("id, code, name, phone, is_checked_in")
+      .eq("event_id", eventId)
+      .or(`code.eq.${trimmed},code.eq.${padded}`)
+      .limit(1)
+      .maybeSingle()
+  );
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+async function findServiceProviderOnlineByQrOrCode(raw: string, eventId: string, method: InputMethod) {
+  const trimmed = raw.trim();
+  const padded = /^\d+$/.test(trimmed) ? trimmed.padStart(4, "0") : trimmed;
+
+  if (method === "qr") {
+    const { data: qrData, error: qrError } = await withTimeout(
+      supabase.from("service_providers")
+        .select("id, code, brand_name, contact_person, is_checked_in")
+        .eq("event_id", eventId)
+        .eq("qr_link", trimmed)
+        .limit(1)
+        .maybeSingle()
+    );
+    if (qrError) throw new Error(qrError.message);
+    if (qrData) return qrData;
+  }
+
+  const { data, error } = await withTimeout(
+    supabase.from("service_providers")
+      .select("id, code, brand_name, contact_person, is_checked_in")
+      .eq("event_id", eventId)
+      .or(`code.eq.${trimmed},code.eq.${padded}`)
+      .limit(1)
+      .maybeSingle()
+  );
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+async function findCrewOnlineByQrOrCode(raw: string, eventId: string, method: InputMethod) {
+  const trimmed = raw.trim();
+  const padded = /^\d+$/.test(trimmed) ? trimmed.padStart(4, "0") : trimmed;
+
+  if (method === "qr") {
+    const { data: qrData, error: qrError } = await withTimeout(
+      supabase.from("crew_members")
+        .select("id, code, name, department, is_checked_in")
+        .eq("event_id", eventId)
+        .eq("qr_link", trimmed)
+        .limit(1)
+        .maybeSingle()
+    );
+    if (qrError) throw new Error(qrError.message);
+    if (qrData) return qrData;
+  }
+
+  const { data, error } = await withTimeout(
+    supabase.from("crew_members")
+      .select("id, code, name, department, is_checked_in")
+      .eq("event_id", eventId)
+      .or(`code.eq.${trimmed},code.eq.${padded}`)
+      .limit(1)
+      .maybeSingle()
+  );
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 // ─── Component ───────────────────────────────────────────────────────
 export default function CheckIn() {
   const [attendeeType, setAttendeeType] = useState<AttendeeType>("participant");
@@ -137,9 +224,8 @@ export default function CheckIn() {
   const performCheckIn = async (raw: string, method: InputMethod) => {
     if (!raw.trim()) return;
     const trimmed = raw.trim();
-    const padded = /^\d+$/.test(trimmed) ? trimmed.padStart(4, "0") : trimmed;
-    const isQrLink = trimmed.startsWith("http");
-    lastScanCtx.current = { isQr: isQrLink && method === "qr", type: attendeeType };
+    const isQrLookup = method === "qr";
+    lastScanCtx.current = { isQr: isQrLookup, type: attendeeType };
 
     setLoading(true);
     setStatus("idle");
@@ -171,7 +257,7 @@ export default function CheckIn() {
         if (!record) {
           setStatus("not_found");
           // Only offer QR registration when the QR camera scanner was used
-          if (isQrLink && attendeeType === "participant" && method === "qr") setLastQrUrl(trimmed);
+          if (isQrLookup && attendeeType === "participant") setLastQrUrl(trimmed);
           return;
         }
 
@@ -231,55 +317,19 @@ export default function CheckIn() {
       let record: { id: string; code: string; is_checked_in: boolean;[key: string]: unknown } | null = null;
 
       if (attendeeType === "participant") {
-        const { data, error } = await withTimeout(
-          isQrLink
-            ? supabase.from("participants")
-              .select("id, code, name, phone, is_checked_in")
-              .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
-            : supabase.from("participants")
-              .select("id, code, name, phone, is_checked_in")
-              .eq("event_id", eventId)
-              .or(`code.eq.${trimmed},code.eq.${padded}`)
-              .limit(1).maybeSingle()
-        );
-        if (error) throw new Error(error.message);
-        record = data;
+        record = await findParticipantOnlineByQrOrCode(trimmed, eventId, method);
 
       } else if (attendeeType === "service_provider") {
-        const { data, error } = await withTimeout(
-          isQrLink
-            ? supabase.from("service_providers")
-              .select("id, code, brand_name, contact_person, is_checked_in")
-              .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
-            : supabase.from("service_providers")
-              .select("id, code, brand_name, contact_person, is_checked_in")
-              .eq("event_id", eventId)
-              .or(`code.eq.${trimmed},code.eq.${padded}`)
-              .limit(1).maybeSingle()
-        );
-        if (error) throw new Error(error.message);
-        record = data;
+        record = await findServiceProviderOnlineByQrOrCode(trimmed, eventId, method);
 
       } else {
-        const { data, error } = await withTimeout(
-          isQrLink
-            ? supabase.from("crew_members")
-              .select("id, code, name, department, is_checked_in")
-              .eq("event_id", eventId).eq("qr_link", trimmed).limit(1).maybeSingle()
-            : supabase.from("crew_members")
-              .select("id, code, name, department, is_checked_in")
-              .eq("event_id", eventId)
-              .or(`code.eq.${trimmed},code.eq.${padded}`)
-              .limit(1).maybeSingle()
-        );
-        if (error) throw new Error(error.message);
-        record = data;
+        record = await findCrewOnlineByQrOrCode(trimmed, eventId, method);
       }
 
       if (!record) {
         setStatus("not_found");
         // Only offer QR registration when the QR camera scanner was used
-        if (isQrLink && attendeeType === "participant" && method === "qr") setLastQrUrl(trimmed);
+        if (isQrLookup && attendeeType === "participant") setLastQrUrl(trimmed);
         return;
       }
 
