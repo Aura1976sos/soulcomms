@@ -751,14 +751,13 @@ export default function ActivityRecorder() {
   }, [
     eventId,
     bulkProcessing,
-    activeActivities,
     bulkActivityId,
+    activeActivities,
     isGuestMode,
     activeEvent,
     bulkCodes,
     resolveParticipantForBulk,
     online,
-    activity,
     user,
     refreshPending,
   ]);
