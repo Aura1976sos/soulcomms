@@ -19,14 +19,15 @@ export function SyncStatusBar() {
   const [queueOpen, setQueueOpen] = useState(false);
 
   const isAdmin = role === "admin" || role === "event_admin";
-  const pending  = queueStats.total;
+  const pending = queueStats.total;
 
   // ── Offline ────────────────────────────────────────────────────────────────
   if (!online) {
     const parts: string[] = [];
-    if (queueStats.walkIns  > 0) parts.push(`${queueStats.walkIns} reg`);
+    if (queueStats.walkIns > 0) parts.push(`${queueStats.walkIns} reg`);
     if (queueStats.checkIns > 0) parts.push(`${queueStats.checkIns} check-in${queueStats.checkIns > 1 ? "s" : ""}`);
     if (queueStats.activities > 0) parts.push(`${queueStats.activities} activit${queueStats.activities > 1 ? "ies" : "y"}`);
+    if ((queueStats.communications ?? 0) > 0) parts.push(`${queueStats.communications} msg${queueStats.communications === 1 ? "" : "s"}`);
 
     return (
       <div className={cn(
@@ -95,14 +96,15 @@ export function SyncStatusBar() {
   // ── Online – sync pending ──────────────────────────────────────────────────
   if (online && pending > 0) {
     const parts: string[] = [];
-    if (queueStats.walkIns  > 0) parts.push(`${queueStats.walkIns} reg`);
+    if (queueStats.walkIns > 0) parts.push(`${queueStats.walkIns} reg`);
     if (queueStats.checkIns > 0) parts.push(`${queueStats.checkIns} check-in${queueStats.checkIns > 1 ? "s" : ""}`);
     if (queueStats.activities > 0) parts.push(`${queueStats.activities} activit${queueStats.activities > 1 ? "ies" : "y"}`);
+    if ((queueStats.communications ?? 0) > 0) parts.push(`${queueStats.communications} msg${queueStats.communications === 1 ? "" : "s"}`);
     return (
       <>
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-400">
           <Clock className="h-3.5 w-3.5 shrink-0" />
-          <span className="hidden sm:inline">{parts.join(" · ")} pending</span>
+          <span className="hidden sm:inline">{parts.length > 0 ? `${parts.join(" · ")} pending` : `${pending} pending`}</span>
           <span className="sm:hidden">{pending} pending</span>
           <Button variant="ghost" size="sm" onClick={triggerSync}
             className="h-5 px-2 text-[10px] text-amber-400 hover:text-amber-400">

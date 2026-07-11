@@ -2,7 +2,7 @@ import { openDB } from "idb";
 import { supabase } from "@/integrations/supabase/client";
 
 const DB_NAME = "sc_comm_offline";
-const STORE   = "pending_messages";
+const STORE = "pending_messages";
 
 interface OfflineMessage {
   id: string;
@@ -37,6 +37,11 @@ export async function getPendingMessages(): Promise<OfflineMessage[]> {
   return db.getAll(STORE);
 }
 
+export async function getPendingMessagesCount(): Promise<number> {
+  const db = await getDB();
+  return db.count(STORE);
+}
+
 export async function deleteOfflineMessage(id: string): Promise<void> {
   const db = await getDB();
   await db.delete(STORE, id);
@@ -49,16 +54,16 @@ export async function flushOfflineMessages(): Promise<{ sent: number; failed: nu
 
   for (const msg of pending) {
     const { error } = await supabase.from("comm_messages").insert({
-      id:          msg.id,
-      channel_id:  msg.channelId,
-      sender_id:   msg.senderId,
+      id: msg.id,
+      channel_id: msg.channelId,
+      sender_id: msg.senderId,
       sender_name: msg.senderName,
       sender_role: msg.senderRole,
-      content:     msg.content,
-      type:        msg.type,
-      mentions:    msg.mentions,
-      metadata:    msg.metadata ?? null,
-      created_at:  msg.createdAt,
+      content: msg.content,
+      type: msg.type,
+      mentions: msg.mentions,
+      metadata: msg.metadata ?? null,
+      created_at: msg.createdAt,
     });
 
     if (error) {

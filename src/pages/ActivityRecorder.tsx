@@ -17,7 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   offlineLookupParticipant, localActivityCheck, queueMutation,
-  getAllWalkIns, getSyncQueueItems,
+  getAllWalkIns, getOfflineParticipants, getSyncQueueItems,
 } from "@/lib/offlineStore";
 import { speak, VM } from "@/lib/voice";
 import { useNavigate } from "react-router-dom";
@@ -55,6 +55,12 @@ interface ActivitySessionDisplay {
   end_time: string;
   session_date: string | null;
   isNow: boolean;
+}
+
+interface LocalParticipantRecord extends FoundParticipant {
+  event_id: string;
+  qr_link?: string | null;
+  is_walkin?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -156,6 +162,93 @@ async function lookupParticipantOnline(query: string, eventId: string): Promise<
   return null;
 }
 
+function searchLocalParticipant(records: LocalParticipantRecord[], raw: string, eventId: string): FoundParticipant | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const isUrl = trimmed.startsWith("http");
+  const normalizedPhone = trimmed.replace(/\D/g, "");
+  const codes = new Set(candidateCodes(trimmed));
+  const lower = trimmed.toLowerCase();
+  const hasNameSearch = /[a-zA-Z]/.test(trimmed) && trimmed.length >= 3;
+
+  const match = records.find((record) => {
+    if (record.event_id !== eventId) return false;
+    if (isUrl && record.qr_link === trimmed) return true;
+    if (codes.has(record.code)) return true;
+    if (normalizedPhone.length >= 8 && record.phone && record.phone.replace(/\D/g, "") === normalizedPhone) return true;
+    if (hasNameSearch && record.name.toLowerCase().includes(lower)) return true;
+    return false;
+  });
+
+  return match
+    ? { id: match.id, code: match.code, name: match.name, phone: match.phone, is_checked_in: match.is_checked_in }
+    : null;
+}
+
+function findExactLocalParticipant(records: LocalParticipantRecord[], raw: string, eventId: string): FoundParticipant | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const isUrl = trimmed.startsWith("http");
+  const normalizedPhone = trimmed.replace(/\D/g, "");
+  const codes = new Set(candidateCodes(trimmed).map(c => c.toLowerCase()));
+  const lower = trimmed.toLowerCase();
+
+  const match = records.find((record) => {
+    if (record.event_id !== eventId) return false;
+    if (isUrl && record.qr_link === trimmed) return true;
+    if (codes.has(record.code.toLowerCase())) return true;
+    if (normalizedPhone.length >= 8 && record.phone && record.phone.replace(/\D/g, "") === normalizedPhone) return true;
+    if (record.name.toLowerCase() === lower) return true;
+    return false;
+  });
+
+  return match
+    ? { id: match.id, code: match.code, name: match.name, phone: match.phone, is_checked_in: match.is_checked_in }
+    : null;
+}
+
+function searchLocalSuggestions(records: LocalParticipantRecord[], raw: string, eventId: string): ParticipantSuggestion[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  const lower = trimmed.toLowerCase();
+  const isUrl = trimmed.startsWith("http");
+  const normalizedPhone = trimmed.replace(/\D/g, "");
+  const codeCandidates = new Set(candidateCodes(trimmed));
+  const byId = new Map<string, ParticipantSuggestion>();
+
+  for (const record of records) {
+    if (record.event_id !== eventId) continue;
+
+    let hint: string | null = null;
+    if (isUrl && record.qr_link?.includes(trimmed)) {
+      hint = "qr";
+    } else if ([...codeCandidates].some(code => record.code.toLowerCase().includes(code.toLowerCase()))) {
+      hint = record.is_walkin ? "walk-in" : "code";
+    } else if (record.name.toLowerCase().includes(lower)) {
+      hint = record.is_walkin ? "walk-in" : "name";
+    } else if (normalizedPhone.length >= 4 && record.phone?.replace(/\D/g, "").includes(normalizedPhone)) {
+      hint = "phone";
+    }
+
+    if (!hint || byId.has(record.id)) continue;
+    byId.set(record.id, {
+      id: record.id,
+      code: record.code,
+      name: record.name,
+      phone: record.phone,
+      is_checked_in: record.is_checked_in,
+      hint,
+    });
+
+    if (byId.size >= 8) break;
+  }
+
+  return [...byId.values()];
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function ActivityRecorder() {
   // ── Step machine ─────────────────────────────────────────────────────────────
@@ -180,6 +273,7 @@ export default function ActivityRecorder() {
   // Prevent accidental repeated taps while a record call is in-flight
   const [recordingActivityId, setRecordingActivityId] = useState<string | null>(null);
   const [sessionsByActivity, setSessionsByActivity] = useState<Record<string, ActivitySessionDisplay[]>>({});
+  const localParticipantsRef = useRef<LocalParticipantRecord[]>([]);
 
   const { user } = useAuth();
   const { activeEvent } = useEvent();
@@ -189,6 +283,58 @@ export default function ActivityRecorder() {
   const navigate = useNavigate();
 
   const eventId = isGuestMode ? (guestSession?.eventId ?? "") : (activeEvent?.id ?? "");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!eventId) {
+      localParticipantsRef.current = [];
+      return;
+    }
+
+    const loadLocalParticipants = async () => {
+      try {
+        const [participants, walkIns] = await Promise.all([
+          getOfflineParticipants(eventId),
+          getAllWalkIns(),
+        ]);
+
+        if (cancelled) return;
+
+        localParticipantsRef.current = [
+          ...walkIns
+            .filter(w => w.event_id === eventId)
+            .map((w) => ({
+              id: w.id,
+              code: w.temp_code,
+              name: w.name,
+              phone: w.phone,
+              is_checked_in: w.is_checked_in,
+              event_id: w.event_id,
+              qr_link: w.qr_link ?? null,
+              is_walkin: true,
+            })),
+          ...participants.map((p) => ({
+            id: p.id,
+            code: p.code,
+            name: p.name,
+            phone: p.phone,
+            is_checked_in: p.is_checked_in,
+            event_id: p.event_id,
+            qr_link: p.qr_link ?? null,
+          })),
+        ];
+      } catch {
+        if (!cancelled) localParticipantsRef.current = [];
+      }
+    };
+
+    void loadLocalParticipants();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId]);
 
   // Group by category for display
   const grouped = activeActivities
@@ -293,79 +439,67 @@ export default function ActivityRecorder() {
       if (!byId.has(p.id)) byId.set(p.id, { ...p, hint });
     };
 
-    try {
-      const walkIns = await getAllWalkIns();
-      const normPhone = trimmed.replace(/\D/g, "");
-      const lower = trimmed.toLowerCase();
-      walkIns
-        .filter(w =>
-          w.event_id === eventId && (
-            w.temp_code.toLowerCase().includes(lower) ||
-            w.name.toLowerCase().includes(lower) ||
-            (w.phone ? w.phone.replace(/\D/g, "").includes(normPhone) : false) ||
-            (w.qr_link ? w.qr_link.includes(trimmed) : false)
-          )
-        )
-        .slice(0, 8)
-        .forEach(w => {
-          add(
-            {
-              id: w.id,
-              code: w.temp_code,
-              name: w.name,
-              phone: w.phone,
-              is_checked_in: w.is_checked_in,
-            },
-            "walk-in"
-          );
-        });
-    } catch {
-      // Ignore walk-in suggestion failures.
+    searchLocalSuggestions(localParticipantsRef.current, trimmed, eventId).forEach((p) => add(p, p.hint));
+
+    if (byId.size >= 8 || !online) {
+      return [...byId.values()].slice(0, 8);
     }
 
     if (online) {
-      if (trimmed.startsWith("http")) {
-        const { data } = await withTimeout(
-          supabase.from("participants").select(SEL)
-            .eq("event_id", eventId)
-            .eq("qr_link", trimmed)
-            .limit(8)
+      const requests: Array<Promise<{ hint: string; rows: FoundParticipant[] }>> = [];
+
+      if (trimmed.startsWith("http") && byId.size < 8) {
+        requests.push(
+          withTimeout(
+            supabase.from("participants").select(SEL)
+              .eq("event_id", eventId)
+              .eq("qr_link", trimmed)
+              .limit(8)
+          ).then(({ data }) => ({ hint: "qr", rows: (data ?? []) as FoundParticipant[] }))
         );
-        (data ?? []).forEach((p) => add(p as FoundParticipant, "qr"));
       }
 
       const codeCandidates = candidateCodes(trimmed);
-      if (codeCandidates.length > 0) {
-        const { data } = await withTimeout(
-          supabase.from("participants").select(SEL)
-            .eq("event_id", eventId)
-            .in("code", codeCandidates.slice(0, 8))
-            .limit(8)
+      if (codeCandidates.length > 0 && byId.size < 8) {
+        requests.push(
+          withTimeout(
+            supabase.from("participants").select(SEL)
+              .eq("event_id", eventId)
+              .in("code", codeCandidates.slice(0, 8))
+              .limit(8)
+          ).then(({ data }) => ({ hint: "code", rows: (data ?? []) as FoundParticipant[] }))
         );
-        (data ?? []).forEach((p) => add(p as FoundParticipant, "code"));
       }
 
       const digits = trimmed.replace(/\D/g, "");
-      if (digits.length >= 4) {
-        const { data } = await withTimeout(
-          supabase.from("participants").select(SEL)
-            .eq("event_id", eventId)
-            .ilike("phone", `%${digits}%`)
-            .limit(8)
+      if (digits.length >= 6 && byId.size < 8) {
+        requests.push(
+          withTimeout(
+            supabase.from("participants").select(SEL)
+              .eq("event_id", eventId)
+              .ilike("phone", `%${digits}%`)
+              .limit(8)
+          ).then(({ data }) => ({ hint: "phone", rows: (data ?? []) as FoundParticipant[] }))
         );
-        (data ?? []).forEach((p) => add(p as FoundParticipant, "phone"));
       }
 
-      if (/[a-zA-Z]/.test(trimmed) && trimmed.length >= 2) {
-        const { data } = await withTimeout(
-          supabase.from("participants").select(SEL)
-            .eq("event_id", eventId)
-            .ilike("name", `%${trimmed}%`)
-            .order("name")
-            .limit(8)
+      if (/[a-zA-Z]/.test(trimmed) && trimmed.length >= 3 && byId.size < 8) {
+        requests.push(
+          withTimeout(
+            supabase.from("participants").select(SEL)
+              .eq("event_id", eventId)
+              .ilike("name", `%${trimmed}%`)
+              .order("name")
+              .limit(8)
+          ).then(({ data }) => ({ hint: "name", rows: (data ?? []) as FoundParticipant[] }))
         );
-        (data ?? []).forEach((p) => add(p as FoundParticipant, "name"));
       }
+
+      const results = await Promise.allSettled(requests);
+      results.forEach((result) => {
+        if (result.status !== "fulfilled") return;
+        result.value.rows.forEach((p) => add(p, result.value.hint));
+      });
     }
 
     return [...byId.values()].slice(0, 8);
@@ -419,7 +553,11 @@ export default function ActivityRecorder() {
 
     try {
       let participant: FoundParticipant | null = null;
-      if (!online) {
+      const localMatch = searchLocalParticipant(localParticipantsRef.current, trimmed, eventId);
+
+      if (localMatch) {
+        participant = localMatch;
+      } else if (!online) {
         const cached = await offlineLookupParticipant(trimmed, eventId);
         if (!cached) { setFindStatus("not_found"); return; }
         participant = { id: cached.id, code: cached.code, name: cached.name, phone: cached.phone, is_checked_in: cached.is_checked_in };
@@ -553,6 +691,13 @@ export default function ActivityRecorder() {
     setSuggestionsLoading(true);
     setFindStatus("idle");
 
+    const exactLocal = findExactLocalParticipant(localParticipantsRef.current, trimmed, eventId);
+    if (exactLocal) {
+      setSuggestionsLoading(false);
+      void selectSuggestion({ ...exactLocal, hint: "local" });
+      return;
+    }
+
     const timer = setTimeout(async () => {
       try {
         const result = await fetchSuggestions(trimmed);
@@ -574,7 +719,7 @@ export default function ActivityRecorder() {
       } finally {
         if (searchSeq.current === seq) setSuggestionsLoading(false);
       }
-    }, 180);
+    }, 80);
 
     return () => clearTimeout(timer);
   }, [query, step, fetchSuggestions, findStatus, selectSuggestion]);

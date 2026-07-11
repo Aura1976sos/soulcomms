@@ -1,40 +1,45 @@
 import { useState, useEffect, useCallback } from "react";
-import { 
+import {
   RefreshCw, AlertTriangle, CheckCircle2, Inbox, Trash2, X,
-  Users, Activity, UserCheck, ChevronDown, ChevronUp,
+  Users, Activity, UserCheck, ChevronDown, ChevronUp, MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   getQueueStats, getSyncQueueItems, dismissAllFailed, dismissSyncMutation,
   flushQueue, QueueStats, SyncMutation,
 } from "@/lib/offlineStore";
+import { getPendingMessagesCount } from "@/lib/commOfflineQueue";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { cn } from "@/lib/utils";
 
 const TYPE_LABELS: Record<string, string> = {
-  register_walkin:      "Walk-In Registration",
+  register_walkin: "Walk-In Registration",
   register_walkin_crew: "Crew Walk-In",
-  register_walkin_sp:   "SP Walk-In",
-  register_qr:          "QR Registration",
-  checkin_participant:  "Participant Check-In",
-  checkin_sp:           "SP Check-In",
-  checkin_crew:         "Crew Check-In",
-  activity_log:         "Activity Record",
+  register_walkin_sp: "SP Walk-In",
+  register_qr: "QR Registration",
+  checkin_participant: "Participant Check-In",
+  checkin_sp: "SP Check-In",
+  checkin_crew: "Crew Check-In",
+  activity_log: "Activity Record",
   session_participation: "Session Ticket",
 };
 
 export function SyncPanel() {
   const { online } = useNetwork();
 
-  const [stats, setStats]       = useState<QueueStats>({ total: 0, walkIns: 0, checkIns: 0, activities: 0 });
-  const [items, setItems]       = useState<SyncMutation[]>([]);
+  const [stats, setStats] = useState<QueueStats>({ total: 0, walkIns: 0, checkIns: 0, activities: 0, communications: 0 });
+  const [items, setItems] = useState<SyncMutation[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [flushing, setFlushing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [q, i] = await Promise.all([getQueueStats(), getSyncQueueItems()]);
-    setStats(q);
+    const [q, i, commPending] = await Promise.all([
+      getQueueStats(),
+      getSyncQueueItems(),
+      getPendingMessagesCount(),
+    ]);
+    setStats({ ...q, total: q.total + commPending, communications: commPending });
     setItems(i);
   }, []);
 
@@ -63,7 +68,7 @@ export function SyncPanel() {
     await refresh();
   };
 
-  const failedItems  = items.filter(m => m.retries >= 1);
+  const failedItems = items.filter(m => m.retries >= 1);
   const pendingItems = items.filter(m => m.retries === 0);
 
   if (stats.total === 0 && failedItems.length === 0) {
@@ -94,9 +99,10 @@ export function SyncPanel() {
           </span>
 
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            {stats.walkIns > 0    && <span className="flex items-center gap-1"><Users className="h-3 w-3" />{stats.walkIns} walk-ins</span>}
-            {stats.checkIns > 0   && <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" />{stats.checkIns} check-ins</span>}
+            {stats.walkIns > 0 && <span className="flex items-center gap-1"><Users className="h-3 w-3" />{stats.walkIns} walk-ins</span>}
+            {stats.checkIns > 0 && <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" />{stats.checkIns} check-ins</span>}
             {stats.activities > 0 && <span className="flex items-center gap-1"><Activity className="h-3 w-3" />{stats.activities} activities</span>}
+            {(stats.communications ?? 0) > 0 && <span className="flex items-center gap-1"><MessageSquare className="h-3 w-3" />{stats.communications} messages</span>}
           </div>
 
           {failedItems.length > 0 && (

@@ -100,6 +100,7 @@ export interface QueueStats {
   walkIns: number;
   checkIns: number;
   activities: number;
+  communications?: number;
 }
 
 // ─── DB Init ─────────────────────────────────────────────────────────────────
@@ -318,7 +319,7 @@ export async function checkInWalkIn(walkInId: string): Promise<void> {
   const queue = await idb.getAll("sync_queue") as SyncMutation[];
   const existing = queue.find(
     m => m.type === "register_walkin" &&
-    (m.payload as Record<string, unknown>).id === walkInId
+      (m.payload as Record<string, unknown>).id === walkInId
   );
   if (existing) {
     await idb.put("sync_queue", {
@@ -338,6 +339,12 @@ export async function getAllWalkIns(): Promise<WalkInRecord[]> {
   return (await idb.getAll("walk_ins")) as WalkInRecord[];
 }
 
+export async function getOfflineParticipants(eventId: string): Promise<CachedParticipant[]> {
+  const idb = await getDb();
+  const all = await idb.getAll("participants") as CachedParticipant[];
+  return all.filter(p => p.event_id === eventId);
+}
+
 // ─── Walk-In Crew Registration ───────────────────────────────────────────────
 export async function createWalkInCrew(
   name: string,
@@ -354,14 +361,14 @@ export async function createWalkInCrew(
   const record: WalkInCrewRecord = {
     id,
     temp_code,
-    name:        name.trim(),
-    team_name:   teamName.trim(),
-    phone:       phone?.trim() || null,
-    event_id:    eventId,
-    is_checked_in:  true,
-    checked_in_at:  now,
+    name: name.trim(),
+    team_name: teamName.trim(),
+    phone: phone?.trim() || null,
+    event_id: eventId,
+    is_checked_in: true,
+    checked_in_at: now,
     check_in_method: "Walk-In Registration",
-    created_at:  now,
+    created_at: now,
     synced: false,
   };
 
@@ -391,14 +398,14 @@ export async function createWalkInSP(
   const record: WalkInSPRecord = {
     id,
     temp_code,
-    brand_name:     brandName.trim(),
+    brand_name: brandName.trim(),
     contact_person: contactPerson?.trim() || null,
-    phone:          phone?.trim() || null,
-    event_id:       eventId,
-    is_checked_in:  true,
-    checked_in_at:  now,
+    phone: phone?.trim() || null,
+    event_id: eventId,
+    is_checked_in: true,
+    checked_in_at: now,
     check_in_method: "Walk-In Registration",
-    created_at:     now,
+    created_at: now,
     synced: false,
   };
 
@@ -426,7 +433,7 @@ export async function createQrParticipant(
   const existing = await idb.getAll("walk_ins") as WalkInRecord[];
   const dup = existing.find(
     w => w.event_id === eventId &&
-         (w.qr_link === qrLink || w.temp_code === normalizedCode)
+      (w.qr_link === qrLink || w.temp_code === normalizedCode)
   );
   if (dup) {
     throw new Error("A participant with this QR or code already exists locally.");
@@ -532,7 +539,7 @@ export async function offlineLookupSP(
   const wiMatch = walkInSPs.find(w =>
     w.event_id === eventId &&
     (w.temp_code === value || w.temp_code === value.toUpperCase() ||
-     w.brand_name.toLowerCase() === value.toLowerCase())
+      w.brand_name.toLowerCase() === value.toLowerCase())
   );
   if (wiMatch) {
     return {
@@ -558,7 +565,7 @@ export async function offlineLookupCrew(
   const wiMatch = walkInCrew.find(w =>
     w.event_id === eventId &&
     (w.temp_code === value || w.temp_code === value.toUpperCase() ||
-     w.name.toLowerCase() === value.toLowerCase())
+      w.name.toLowerCase() === value.toLowerCase())
   );
   if (wiMatch) {
     return {
@@ -683,13 +690,6 @@ function withFlushTimeout<T>(p: Promise<T>, ms = FLUSH_TIMEOUT_MS): Promise<T> {
   ]);
 }
 
-function hasPendingRegistration(queue: SyncMutation[], participantId: string): boolean {
-  return queue.some(m =>
-    (m.type === "register_walkin" || m.type === "register_qr") &&
-    (m.payload as Record<string, unknown>).id === participantId
-  );
-}
-
 export async function flushQueue(): Promise<{ synced: number; failed: number }> {
   if (flushInProgress) return { synced: 0, failed: 0 };
   flushInProgress = true;
@@ -700,18 +700,24 @@ export async function flushQueue(): Promise<{ synced: number; failed: number }> 
     let synced = 0; let failed = 0;
 
     const ORDER: Record<MutationType, number> = {
-      register_walkin:      0,
+      register_walkin: 0,
       register_walkin_crew: 0,
-      register_walkin_sp:   0,
-      register_qr:          0,
-      checkin_participant:  1,
-      checkin_sp:           1,
-      checkin_crew:         1,
-      activity_log:         2,
+      register_walkin_sp: 0,
+      register_qr: 0,
+      checkin_participant: 1,
+      checkin_sp: 1,
+      checkin_crew: 1,
+      activity_log: 2,
       session_participation: 2,
     };
     const sorted = [...queue].sort(
       (a, b) => (ORDER[a.type] ?? 3) - (ORDER[b.type] ?? 3)
+    );
+    const pendingRegistrationIds = new Set(
+      sorted
+        .filter(m => m.type === "register_walkin" || m.type === "register_qr")
+        .map(m => String((m.payload as Record<string, unknown>).id ?? ""))
+        .filter(Boolean)
     );
 
     for (const mutation of sorted) {
@@ -742,6 +748,7 @@ export async function flushQueue(): Promise<{ synced: number; failed: number }> 
           if (!inserted) throw new Error("Could not assign unique code after 10 attempts");
           const walkin = await idb.get("walk_ins", String(p.id));
           if (walkin) await idb.put("walk_ins", { ...walkin, synced: true });
+          pendingRegistrationIds.delete(String(p.id));
 
         } else if (mutation.type === "register_walkin_crew") {
           const p = mutation.payload as Record<string, unknown>;
@@ -810,10 +817,11 @@ export async function flushQueue(): Promise<{ synced: number; failed: number }> 
           if (error) throw error;
           const walkin = await idb.get("walk_ins", String(p.id));
           if (walkin) await idb.put("walk_ins", { ...walkin, synced: true });
+          pendingRegistrationIds.delete(String(p.id));
 
         } else if (mutation.type === "checkin_participant") {
           const p = mutation.payload as Record<string, unknown>;
-          if (hasPendingRegistration(sorted, String(p.id))) { failed++; continue; }
+          if (pendingRegistrationIds.has(String(p.id))) { continue; }
           const { error } = await withFlushTimeout(
             supabase.from("participants").update({
               is_checked_in: p.is_checked_in, checked_in_at: p.checked_in_at,
@@ -844,14 +852,14 @@ export async function flushQueue(): Promise<{ synced: number; failed: number }> 
 
         } else if (mutation.type === "activity_log") {
           const p = mutation.payload as Record<string, unknown>;
-          if (p.participant_id && hasPendingRegistration(sorted, String(p.participant_id))) {
-            failed++; continue;
+          if (p.participant_id && pendingRegistrationIds.has(String(p.participant_id))) {
+            continue;
           }
           const { error } = await withFlushTimeout(
             supabase.from("activity_logs").insert(p)
           );
           if (error && !error.message.toLowerCase().includes("duplicate") &&
-              !error.message.toLowerCase().includes("unique")) throw error;
+            !error.message.toLowerCase().includes("unique")) throw error;
 
         } else if (mutation.type === "session_participation") {
           const p = mutation.payload as Record<string, unknown>;
