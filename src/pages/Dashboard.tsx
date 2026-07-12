@@ -61,7 +61,7 @@ interface ConsolidatedExportData {
     id: string;
     code: string;
     name: string;
-    team_name: string | null;
+    department: string | null;
     phone: string | null;
     is_checked_in: boolean;
     check_in_method: string | null;
@@ -351,7 +351,7 @@ export default function Dashboard() {
         .eq("event_id", currentEventId),
       supabase
         .from("crew_members")
-        .select("id, code, name, team_name, phone, is_checked_in, check_in_method, checked_in_at")
+        .select("id, code, name, department, phone, is_checked_in, check_in_method, checked_in_at")
         .eq("event_id", currentEventId),
       supabase
         .from("service_providers")
@@ -715,7 +715,7 @@ export default function Dashboard() {
               Type: "Crew",
               Code: row.code,
               NameOrBrand: row.name,
-              TeamOrContact: row.team_name ?? "",
+              TeamOrContact: row.department ?? "",
               Phone: row.phone ?? "",
               CheckInMethod: row.check_in_method ?? "",
               CheckedIn: row.is_checked_in ? "Yes" : "No",
