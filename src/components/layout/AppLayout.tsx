@@ -1,14 +1,11 @@
 import { ReactNode, useState, useEffect, useRef } from "react";
-import { useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { SyncStatusBar } from "./SyncStatusBar";
-import { SolutionWidget } from "@/components/solution/SolutionWidget";
 import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { useEvent } from "@/contexts/EventContext";
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -21,22 +18,7 @@ const HEARTBEAT_INTERVAL = 60 * 1000; // 60 seconds for accurate presence
 export const AppLayout = ({ children, title, subtitle }: AppLayoutProps) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user } = useAuth();
-  const { activeEvent } = useEvent();
-  const { pathname } = useLocation();
   const lastHeartbeat = useRef<number>(0);
-
-  // Derive Solution™ page key from current route
-  const solutionPage =
-    pathname.includes("checkin") ? "checkin" :
-    pathname.includes("activity-recorder") ? "activity_recorder" :
-    pathname.includes("staff") ? "staff" :
-    pathname.includes("dashboard") ? "dashboard" :
-    pathname.includes("participants") ? "participants" :
-    pathname.includes("service-providers") ? "service_providers" :
-    pathname.includes("crew") ? "crew" :
-    pathname.includes("events") ? "events" :
-    pathname.includes("leaderboard") ? "leaderboard" :
-    "general";
 
   // Update last_seen_at every 5 minutes while app is open
   useEffect(() => {
@@ -96,9 +78,6 @@ export const AppLayout = ({ children, title, subtitle }: AppLayoutProps) => {
           {children}
         </main>
       </div>
-
-      {/* Solution™ — context-aware assistant */}
-      <SolutionWidget page={solutionPage} eventName={activeEvent?.name} />
     </div>
   );
 };
