@@ -37,6 +37,9 @@ interface DashboardStats {
   peakCheckinHourLabel: string;
   peakCheckinHourCount: number;
   peakCheckinHourBuckets: Array<{ hour: string; count: number }>;
+  scanFailedRecovered: number;
+  walkInTotal: number;
+  byGroup: Array<{ group: string; count: number }>;
   recentLogs: Array<{
     id: string;
     participant_code: string;
@@ -138,6 +141,7 @@ export default function Dashboard() {
     totalExperiences: 0, effectiveCounts: {}, peakActivityName: "No activity yet", peakActivityCount: 0,
     peakHourLabel: "—", peakHourCount: 0, peakHourBuckets: [],
     peakCheckinHourLabel: "—", peakCheckinHourCount: 0, peakCheckinHourBuckets: [],
+    scanFailedRecovered: 0, walkInTotal: 0, byGroup: [],
     recentLogs: [],
   });
   const [loading, setLoading] = useState(true);
@@ -162,6 +166,10 @@ export default function Dashboard() {
         { data: checkinRows },
         { data: statsJson },
         { data: activitiesWithManual },
+        { count: recoveredFromScanFailure },
+        { count: participantWalkIns },
+        { count: crewWalkIns },
+        { count: serviceProviderWalkIns },
       ] = await Promise.all([
         supabase.from("participants").select("*", { count: "exact", head: true }).eq("event_id", eid),
         supabase.from("participants").select("*", { count: "exact", head: true }).eq("event_id", eid).eq("is_checked_in", true),
@@ -180,6 +188,10 @@ export default function Dashboard() {
         // Single RPC replaces 4 full-table scans (activity_logs + session_participations aggregated server-side)
         supabase.rpc("get_dashboard_stats", { p_event_id: eid }),
         supabase.from("activities").select("id, code, manual_count").eq("event_id", eid),
+        supabase.from("participants").select("*", { count: "exact", head: true }).eq("event_id", eid).eq("source", "QR Registration"),
+        supabase.from("participants").select("*", { count: "exact", head: true }).eq("event_id", eid).eq("source", "Walk-In"),
+        supabase.from("crew_members").select("*", { count: "exact", head: true }).eq("event_id", eid).eq("check_in_method", "Walk-In Registration"),
+        supabase.from("service_providers").select("*", { count: "exact", head: true }).eq("event_id", eid).eq("check_in_method", "Walk-In Registration"),
       ]);
 
       // Parse RPC result
@@ -197,6 +209,18 @@ export default function Dashboard() {
       });
 
       const totalExperiences = Object.values(effectiveCounts).reduce((s, n) => s + n, 0);
+
+      const byGroupMap = new Map<string, number>();
+      activeActivities.forEach((activity) => {
+        const key = activity.category?.trim() || "General";
+        byGroupMap.set(key, (byGroupMap.get(key) ?? 0) + (effectiveCounts[activity.id] ?? 0));
+      });
+      const byGroup = Array.from(byGroupMap.entries())
+        .map(([group, count]) => ({ group, count }))
+        .sort((a, b) => b.count - a.count);
+
+      const scanFailedRecovered = recoveredFromScanFailure ?? 0;
+      const walkInTotal = (participantWalkIns ?? 0) + (crewWalkIns ?? 0) + (serviceProviderWalkIns ?? 0);
 
       const activityLogEntries = (activityLogRows ?? []) as Array<{ experience: string; recorded_at: string }>;
       const experienceCounts = new Map<string, number>();
@@ -321,6 +345,9 @@ export default function Dashboard() {
         peakCheckinHourLabel,
         peakCheckinHourCount: peakCheckinBucket?.count ?? 0,
         peakCheckinHourBuckets: peakCheckinChartData,
+        scanFailedRecovered,
+        walkInTotal,
+        byGroup,
         recentLogs: (recentLogs ?? []) as DashboardStats["recentLogs"],
       });
     } catch {
@@ -895,6 +922,69 @@ export default function Dashboard() {
             delay={320}
             decimals={1}
           />
+        </div>
+
+        {/* Consolidated analytics summary */}
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="glass-card rounded-2xl p-5 lg:col-span-2">
+            <p className="text-[10px] font-bold uppercase tracking-[3px] text-muted-foreground mb-4">
+              Overview
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
+                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Peak Check-In Time</p>
+                <p className="text-lg font-bold text-foreground mt-1">{stats.peakCheckinHourLabel}</p>
+                <p className="text-xs text-muted-foreground">{stats.peakCheckinHourCount.toLocaleString()} arrivals</p>
+              </div>
+              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
+                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Peak Activity Time</p>
+                <p className="text-lg font-bold text-foreground mt-1">{stats.peakHourLabel}</p>
+                <p className="text-xs text-muted-foreground">{stats.peakHourCount.toLocaleString()} records</p>
+              </div>
+              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
+                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Peak Activity</p>
+                <p className="text-sm font-bold text-foreground mt-1 truncate">{stats.peakActivityName}</p>
+                <p className="text-xs text-muted-foreground">{stats.peakActivityCount.toLocaleString()} records</p>
+              </div>
+              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
+                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Scan Failed (Recovered)</p>
+                <p className="text-lg font-bold text-foreground mt-1">{stats.scanFailedRecovered.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">QR registrations</p>
+              </div>
+              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
+                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Total Walk-Ins</p>
+                <p className="text-lg font-bold text-foreground mt-1">{stats.walkInTotal.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">Participants, crew, providers</p>
+              </div>
+              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
+                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Check-In Rate</p>
+                <p className="text-lg font-bold text-foreground mt-1">
+                  {stats.totalRegistered > 0 ? Math.round((stats.checkedIn / stats.totalRegistered) * 100) : 0}%
+                </p>
+                <p className="text-xs text-muted-foreground">of registered participants</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="glass-card rounded-2xl p-5">
+            <p className="text-[10px] font-bold uppercase tracking-[3px] text-muted-foreground mb-4">
+              By Group
+            </p>
+            {stats.byGroup.length > 0 ? (
+              <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                {stats.byGroup.map((row) => (
+                  <div key={row.group} className="rounded-lg border border-border/50 bg-background/40 px-3 py-2 flex items-center justify-between">
+                    <span className="text-sm text-foreground truncate pr-3">{row.group}</span>
+                    <span className="text-sm font-bold text-foreground">{row.count.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border/60 bg-background/30 p-6 text-center text-sm text-muted-foreground">
+                No group analytics available yet.
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Peak check-in and activity charts */}
