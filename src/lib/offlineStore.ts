@@ -100,7 +100,6 @@ export interface QueueStats {
   walkIns: number;
   checkIns: number;
   activities: number;
-  communications?: number;
 }
 
 // ─── DB Init ─────────────────────────────────────────────────────────────────
