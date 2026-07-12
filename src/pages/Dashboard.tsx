@@ -87,6 +87,8 @@ interface ActivityExportData {
     code: string;
     category: string | null;
     manual_count: number | null;
+    status?: string | null;
+    sort_order?: number | null;
   }>;
   activityLogRows: Array<{
     id: string;
@@ -95,6 +97,7 @@ interface ActivityExportData {
     experience: string;
     activity_id: string | null;
     recorded_at: string | null;
+    recorded_by?: string | null;
     participants: { name: string } | null;
   }>;
   sessionParticipationRows: Array<{
@@ -102,9 +105,19 @@ interface ActivityExportData {
     participant_code: string;
     participant_name: string;
     activity_id: string;
+    session_id: string;
     generated_at: string | null;
     verified_at: string | null;
+    generated_by?: string | null;
+    verified_by?: string | null;
     status: string | null;
+  }>;
+  activitySessionRows: Array<{
+    id: string;
+    activity_id: string;
+    start_time: string;
+    end_time: string;
+    session_date: string | null;
   }>;
 }
 
@@ -382,32 +395,38 @@ export default function Dashboard() {
 
   const fetchActivityExportData = useCallback(async (): Promise<ActivityExportData> => {
     if (!currentEventId) {
-      return { activitiesRows: [], activityLogRows: [], sessionParticipationRows: [] };
+      return { activitiesRows: [], activityLogRows: [], sessionParticipationRows: [], activitySessionRows: [] };
     }
 
-    const [activitiesRes, activityLogsRes, sessionParticipationRes] = await Promise.all([
+    const [activitiesRes, activityLogsRes, sessionParticipationRes, activitySessionsRes] = await Promise.all([
       supabase
         .from("activities")
-        .select("id, name, code, category, manual_count")
+        .select("id, name, code, category, manual_count, status, sort_order")
         .eq("event_id", currentEventId),
       supabase
         .from("activity_logs")
-        .select("id, participant_code, participant_id, experience, activity_id, recorded_at, participants(name)")
+        .select("id, participant_code, participant_id, experience, activity_id, recorded_at, recorded_by, participants(name)")
         .eq("event_id", currentEventId),
       supabase
         .from("session_participations")
-        .select("id, participant_code, participant_name, activity_id, generated_at, verified_at, status")
+        .select("id, participant_code, participant_name, activity_id, session_id, generated_at, verified_at, generated_by, verified_by, status")
+        .eq("event_id", currentEventId),
+      supabase
+        .from("activity_sessions")
+        .select("id, activity_id, start_time, end_time, session_date")
         .eq("event_id", currentEventId),
     ]);
 
     if (activitiesRes.error) throw new Error(activitiesRes.error.message);
     if (activityLogsRes.error) throw new Error(activityLogsRes.error.message);
     if (sessionParticipationRes.error) throw new Error(sessionParticipationRes.error.message);
+    if (activitySessionsRes.error) throw new Error(activitySessionsRes.error.message);
 
     return {
       activitiesRows: (activitiesRes.data ?? []) as ActivityExportData["activitiesRows"],
       activityLogRows: (activityLogsRes.data ?? []) as ActivityExportData["activityLogRows"],
       sessionParticipationRows: (sessionParticipationRes.data ?? []) as ActivityExportData["sessionParticipationRows"],
+      activitySessionRows: (activitySessionsRes.data ?? []) as ActivityExportData["activitySessionRows"],
     };
   }, [currentEventId]);
 
@@ -486,6 +505,32 @@ export default function Dashboard() {
         ...consolidated.serviceProviderRows,
       ].filter((row) => row.is_checked_in).length;
 
+      const formatHourLabel = (date: Date): string => {
+        const hour = date.getHours();
+        const suffix = hour >= 12 ? "PM" : "AM";
+        const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+        return `${hour12}${suffix}`;
+      };
+
+      const formatSessionRange = (startTime: string, endTime: string): string => {
+        const toLabel = (t: string) => {
+          const [hRaw, mRaw] = t.split(":");
+          const h = Number(hRaw || 0);
+          const m = Number(mRaw || 0);
+          const suffix = h >= 12 ? "PM" : "AM";
+          const h12 = h % 12 === 0 ? 12 : h % 12;
+          const mm = String(m).padStart(2, "0");
+          return `${h12}:${mm} ${suffix}`;
+        };
+        return `${toLabel(startTime)}-${toLabel(endTime)}`;
+      };
+
+      const sortWithDayWrap = <T extends { hourIndex: number }>(rows: T[]) => {
+        if (rows.length === 0) return rows;
+        const startHour = Math.min(...rows.map((r) => r.hourIndex));
+        return [...rows].sort((a, b) => ((a.hourIndex - startHour + 24) % 24) - ((b.hourIndex - startHour + 24) % 24));
+      };
+
       const activityById = new Map(
         activityExport.activitiesRows.map((activity) => [activity.id, activity] as const)
       );
@@ -494,6 +539,9 @@ export default function Dashboard() {
       );
       const activityByName = new Map(
         activityExport.activitiesRows.map((activity) => [activity.name.toLowerCase(), activity] as const)
+      );
+      const sessionById = new Map(
+        activityExport.activitySessionRows.map((s) => [s.id, s] as const)
       );
 
       const resolveActivity = (activityId: string | null, fallback: string | null) => {
@@ -516,11 +564,18 @@ export default function Dashboard() {
             ConsolidatedActivity: resolved?.name ?? row.experience,
             ActivityCode: resolved?.code ?? row.experience,
             Category: resolved?.category ?? "Uncategorized",
+            RawActivity: row.experience,
             Timestamp: row.recorded_at ?? "",
+            RecordedBy: row.recorded_by ? "staff" : "staff",
+            Notes: "",
           };
         }),
         ...activityExport.sessionParticipationRows.map((row) => {
           const resolved = resolveActivity(row.activity_id, null);
+          const session = sessionById.get(row.session_id);
+          const rawActivity = session
+            ? `${resolved?.name ?? row.activity_id} — ${formatSessionRange(session.start_time, session.end_time)}`
+            : (resolved?.name ?? row.activity_id);
           return {
             SourceTable: "session_participations",
             RecordId: row.id,
@@ -529,7 +584,11 @@ export default function Dashboard() {
             ConsolidatedActivity: resolved?.name ?? row.activity_id,
             ActivityCode: resolved?.code ?? row.activity_id,
             Category: resolved?.category ?? "Uncategorized",
+            RawActivity: rawActivity,
             Timestamp: row.verified_at ?? row.generated_at ?? "",
+            RecordedBy: (row.verified_by || row.generated_by) ? "staff" : "staff",
+            Notes: row.status ?? "",
+            SessionId: row.session_id,
           };
         }),
       ];
@@ -560,28 +619,27 @@ export default function Dashboard() {
         .map(([category, count]) => ({ Category: category, Count: count }))
         .sort((a, b) => b.Count - a.Count);
 
-      const timelineMap = new Map<string, number>();
+      const timelineMap = new Map<number, number>();
       consolidatedRawRecords.forEach((record) => {
         if (!record.Timestamp) return;
         const dt = new Date(record.Timestamp);
         if (Number.isNaN(dt.getTime())) return;
-        const hour = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} ${String(dt.getHours()).padStart(2, "0")}:00`;
-        timelineMap.set(hour, (timelineMap.get(hour) ?? 0) + 1);
+        const h = dt.getHours();
+        timelineMap.set(h, (timelineMap.get(h) ?? 0) + 1);
       });
-      const activityTimelineRows = Array.from(timelineMap.entries())
-        .map(([hour, records]) => ({ Hour: hour, Records: records }))
-        .sort((a, b) => a.Hour.localeCompare(b.Hour));
+      const activityTimelineRows = sortWithDayWrap(
+        Array.from(timelineMap.entries())
+          .map(([hourIndex, records]) => ({ hourIndex, Hour: formatHourLabel(new Date(2000, 0, 1, hourIndex, 0, 0)), Records: records }))
+      ).map(({ Hour, Records }) => ({ Hour, Records }));
 
       const participantCheckinLogRows = consolidated.participantRows
         .filter((row) => row.is_checked_in)
         .sort((a, b) => (a.checked_in_at ?? "").localeCompare(b.checked_in_at ?? ""))
         .map((row) => ({
-          ParticipantCode: row.code,
-          ParticipantName: row.name,
-          Phone: row.phone ?? "",
-          Source: row.source ?? "",
-          CheckInMethod: row.check_in_method ?? "",
-          CheckedInAt: row.checked_in_at ?? "",
+          Participant: row.name,
+          CheckedInAt: row.checked_in_at ? new Date(row.checked_in_at).toLocaleString() : "",
+          CheckedInBy: "staff",
+          Notes: "",
         }));
 
       const registeredParticipants = consolidated.participantRows.length;
@@ -594,114 +652,117 @@ export default function Dashboard() {
         ? Number((totalExperiences / uniqueParticipantsEngaged).toFixed(1))
         : 0;
 
-      const checkinHourMap = new Map<string, number>();
+      const checkinHourMap = new Map<number, number>();
       participantCheckinLogRows.forEach((row) => {
         if (!row.CheckedInAt) return;
         const dt = new Date(row.CheckedInAt);
         if (Number.isNaN(dt.getTime())) return;
-        const hour = `${String(dt.getHours()).padStart(2, "0")}:00`;
-        checkinHourMap.set(hour, (checkinHourMap.get(hour) ?? 0) + 1);
+        const h = dt.getHours();
+        checkinHourMap.set(h, (checkinHourMap.get(h) ?? 0) + 1);
       });
-      const checkinHourRows = Array.from(checkinHourMap.entries())
-        .map(([hour, count]) => ({ Hour: hour, Checkins: count }))
-        .sort((a, b) => a.Hour.localeCompare(b.Hour));
+      const checkinHourRows = sortWithDayWrap(
+        Array.from(checkinHourMap.entries()).map(([hourIndex, count]) => ({
+          hourIndex,
+          Hour: formatHourLabel(new Date(2000, 0, 1, hourIndex, 0, 0)),
+          Checkins: count,
+        }))
+      ).map(({ Hour, Checkins }) => ({ Hour, Checkins }));
 
       const peakCheckin = [...checkinHourRows].sort((a, b) => b.Checkins - a.Checkins)[0];
       const peakActivityTime = [...activityTimelineRows].sort((a, b) => b.Records - a.Records)[0];
       const peakActivity = activityCountRows[0];
 
-      const summarySheet = XLSX.utils.json_to_sheet([
+      const activityParticipantSetByCode = new Map<string, Set<string>>();
+      consolidatedRawRecords.forEach((record) => {
+        const key = record.ActivityCode.toLowerCase();
+        if (!activityParticipantSetByCode.has(key)) activityParticipantSetByCode.set(key, new Set<string>());
+        activityParticipantSetByCode.get(key)?.add(record.ParticipantCode);
+      });
+
+      const sessionCountsByActivity = new Map<string, number>();
+      activityExport.sessionParticipationRows.forEach((row) => {
+        const key = row.activity_id;
+        if (!sessionCountsByActivity.has(key)) sessionCountsByActivity.set(key, 0);
+      });
+      const distinctSessionsByActivity = new Map<string, Set<string>>();
+      activityExport.sessionParticipationRows.forEach((row) => {
+        if (!distinctSessionsByActivity.has(row.activity_id)) distinctSessionsByActivity.set(row.activity_id, new Set<string>());
+        distinctSessionsByActivity.get(row.activity_id)?.add(row.session_id);
+      });
+
+      const activitiesSummaryRows = [...activityExport.activitiesRows]
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .map((activity) => {
+          const codeKey = activity.code.toLowerCase();
+          const totalRecords = consolidatedRawRecords.filter((r) => r.ActivityCode.toLowerCase() === codeKey || r.ConsolidatedActivity.toLowerCase() === activity.name.toLowerCase()).length;
+          const uniqueParticipants = activityParticipantSetByCode.get(codeKey)?.size ?? 0;
+          const mergedSessions = Math.max(1, distinctSessionsByActivity.get(activity.id)?.size ?? 0);
+          return {
+            Activity: activity.name,
+            Group: activity.category ?? "General",
+            TotalRecords: totalRecords,
+            UniqueParticipants: uniqueParticipants,
+            SessionsMerged: mergedSessions,
+          };
+        })
+        .filter((row) => row.TotalRecords > 0 || row.UniqueParticipants > 0);
+
+      const byGroupAccumulator = new Map<string, { total: number; participants: Set<string> }>();
+      consolidatedRawRecords.forEach((record) => {
+        const group = record.Category || "General";
+        if (!byGroupAccumulator.has(group)) {
+          byGroupAccumulator.set(group, { total: 0, participants: new Set<string>() });
+        }
+        const bucket = byGroupAccumulator.get(group);
+        if (!bucket) return;
+        bucket.total += 1;
+        if (record.ParticipantCode) bucket.participants.add(record.ParticipantCode);
+      });
+
+      const byGroupRows = Array.from(byGroupAccumulator.entries())
+        .map(([group, bucket]) => ({ Group: group, TotalRecords: bucket.total, UniqueParticipants: bucket.participants.size }))
+        .sort((a, b) => b.TotalRecords - a.TotalRecords);
+
+      const overviewSheet = XLSX.utils.json_to_sheet([
         { Metric: "Event", Value: currentEventName ?? "N/A" },
-        { Metric: "Generated At", Value: generatedAt },
-        { Metric: "Registered Participants", Value: registeredParticipants },
-        { Metric: "Checked-In Participants", Value: checkedInParticipants },
-        { Metric: "Unique Participants Engaged", Value: uniqueParticipantsEngaged },
-        { Metric: "Total Experiences", Value: totalExperiences },
-        { Metric: "Avg Experiences / Participant", Value: avgExperiences },
-        { Metric: "Peak Check-In Time", Value: peakCheckin?.Hour ?? "—" },
-        { Metric: "Peak Check-In Count", Value: peakCheckin?.Checkins ?? 0 },
-        { Metric: "Peak Activity Time", Value: peakActivityTime?.Hour ?? "—" },
-        { Metric: "Peak Activity Count", Value: peakActivityTime?.Records ?? 0 },
-        { Metric: "Peak Activity", Value: peakActivity ? `${peakActivity.Activity} (${peakActivity.Count})` : "—" },
-        { Metric: "All Attendees Registered (Participants + Crew + Service Providers)", Value: allAttendeesRegistered },
-        { Metric: "All Attendees Checked-In (Participants + Crew + Service Providers)", Value: allAttendeesCheckedIn },
-        { Metric: "Walk-In Participants", Value: walkInParticipants.length },
-        { Metric: "Walk-In Crew", Value: walkInCrew.length },
-        { Metric: "Walk-In Service Providers", Value: walkInServiceProviders.length },
-        { Metric: "Total Walk-Ins (Consolidated)", Value: consolidatedWalkInTotal },
-        { Metric: "Recovered From Scan Failure (QR Registration)", Value: scanRecoveryParticipants.length },
+        { Metric: "Total Registered", Value: registeredParticipants },
+        { Metric: "Total Checked In", Value: checkedInParticipants },
+        { Metric: "Check-In Rate (%)", Value: registeredParticipants > 0 ? Math.round((checkedInParticipants / registeredParticipants) * 100) : 0 },
+        { Metric: "Total Activity Records", Value: totalExperiences },
+        { Metric: "Unique Participants in Activities", Value: uniqueParticipantsEngaged },
+        { Metric: "Activities Active", Value: activitiesSummaryRows.length },
+        { Metric: "Top Activity (by unique pax)", Value: activitiesSummaryRows.sort((a, b) => b.UniqueParticipants - a.UniqueParticipants)[0]?.Activity ?? "—" },
+        { Metric: "Peak Check-In Hour", Value: peakCheckin?.Hour ?? "—" },
+        { Metric: "Peak Activity Hour", Value: peakActivityTime?.Hour ?? "—" },
+        { Metric: "Generated", Value: generatedAt },
       ]);
-      XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+      XLSX.utils.book_append_sheet(workbook, overviewSheet, "Overview");
 
-      const consolidatedSummaryRows: Array<{ Section: string; Metric: string; Value: string | number }> = [
-        { Section: "Overview", Metric: "Participants Registered", Value: registeredParticipants },
-        { Section: "Overview", Metric: "Participants Checked-In", Value: checkedInParticipants },
-        { Section: "Overview", Metric: "Unique Participants Engaged", Value: uniqueParticipantsEngaged },
-        { Section: "Overview", Metric: "Total Experience Records", Value: totalExperiences },
-        { Section: "Overview", Metric: "Avg Experiences / Participant", Value: avgExperiences },
-        { Section: "Peaks", Metric: "Peak Check-In Time", Value: peakCheckin?.Hour ?? "—" },
-        { Section: "Peaks", Metric: "Peak Check-In Count", Value: peakCheckin?.Checkins ?? 0 },
-        { Section: "Peaks", Metric: "Peak Activity Time", Value: peakActivityTime?.Hour ?? "—" },
-        { Section: "Peaks", Metric: "Peak Activity Count", Value: peakActivityTime?.Records ?? 0 },
-        { Section: "Peaks", Metric: "Peak Activity", Value: peakActivity ? `${peakActivity.Activity} (${peakActivity.Count})` : "—" },
-        { Section: "Attendance", Metric: "All Attendees Registered", Value: allAttendeesRegistered },
-        { Section: "Attendance", Metric: "All Attendees Checked-In", Value: allAttendeesCheckedIn },
-        { Section: "Attendance", Metric: "Total Walk-Ins", Value: consolidatedWalkInTotal },
-        { Section: "Attendance", Metric: "Recovered From Scan Failure", Value: scanRecoveryParticipants.length },
-      ];
+      const activitiesSheet = XLSX.utils.json_to_sheet(
+        activitiesSummaryRows.length > 0
+          ? activitiesSummaryRows
+          : [{ Activity: "No data", Group: "", TotalRecords: 0, UniqueParticipants: 0, SessionsMerged: 0 }]
+      );
+      XLSX.utils.book_append_sheet(workbook, activitiesSheet, `${activitiesSummaryRows.length || 0} Activities`);
 
-      consolidatedSummaryRows.push(...categoryCountRows.map((row) => ({
-        Section: "Activity Categories",
-        Metric: row.Category,
-        Value: row.Count,
-      })));
-
-      const consolidatedSummarySheet = XLSX.utils.json_to_sheet(consolidatedSummaryRows);
-      XLSX.utils.book_append_sheet(workbook, consolidatedSummarySheet, "Consolidated Report");
-
-      const consolidatedByTypeSheet = XLSX.utils.json_to_sheet([
-        {
-          Category: "Participants",
-          Registered: consolidated.participantRows.length,
-          CheckedIn: consolidated.participantRows.filter((row) => row.is_checked_in).length,
-          WalkIns: walkInParticipants.length,
-          ScanRecovery: scanRecoveryParticipants.length,
-        },
-        {
-          Category: "Crew",
-          Registered: consolidated.crewRows.length,
-          CheckedIn: consolidated.crewRows.filter((row) => row.is_checked_in).length,
-          WalkIns: walkInCrew.length,
-          ScanRecovery: 0,
-        },
-        {
-          Category: "Service Providers",
-          Registered: consolidated.serviceProviderRows.length,
-          CheckedIn: consolidated.serviceProviderRows.filter((row) => row.is_checked_in).length,
-          WalkIns: walkInServiceProviders.length,
-          ScanRecovery: 0,
-        },
-        {
-          Category: "TOTAL",
-          Registered: allAttendeesRegistered,
-          CheckedIn: allAttendeesCheckedIn,
-          WalkIns: consolidatedWalkInTotal,
-          ScanRecovery: scanRecoveryParticipants.length,
-        },
-      ]);
-      XLSX.utils.book_append_sheet(workbook, consolidatedByTypeSheet, "Consolidated Event Summary");
+      const byGroupSheet = XLSX.utils.json_to_sheet(
+        byGroupRows.length > 0
+          ? byGroupRows
+          : [{ Group: "No data", TotalRecords: 0, UniqueParticipants: 0 }]
+      );
+      XLSX.utils.book_append_sheet(workbook, byGroupSheet, "By Group");
 
       const checkinHoursSheet = XLSX.utils.json_to_sheet(
         checkinHourRows.length > 0
           ? checkinHourRows
           : [{ Hour: "No data", Checkins: 0 }]
       );
-      XLSX.utils.book_append_sheet(workbook, checkinHoursSheet, "Checkin Hours");
+      XLSX.utils.book_append_sheet(workbook, checkinHoursSheet, "Check-In Timeline");
 
       const participantCheckinSheet = XLSX.utils.json_to_sheet(
         participantCheckinLogRows.length > 0
           ? participantCheckinLogRows
-          : [{ ParticipantCode: "No checked-in participants", ParticipantName: "", Phone: "", Source: "", CheckInMethod: "", CheckedInAt: "" }]
+          : [{ Participant: "No checked-in participants", CheckedInAt: "", CheckedInBy: "", Notes: "" }]
       );
       XLSX.utils.book_append_sheet(workbook, participantCheckinSheet, "Check-In Log");
 
@@ -710,115 +771,27 @@ export default function Dashboard() {
           ? activityTimelineRows
           : [{ Hour: "No data", Records: 0 }]
       );
-      XLSX.utils.book_append_sheet(workbook, activityHoursSheet, "Activity Hours");
-
-      const activityCountByCode = new Map(activityCountRows.map((row) => [row.Code.toLowerCase(), row.Count] as const));
-      const activityCountByName = new Map(activityCountRows.map((row) => [row.Activity.toLowerCase(), row.Count] as const));
-
-      const activityParticipationSheet = XLSX.utils.json_to_sheet(
-        activities.length > 0
-          ? activities.map((activity) => ({
-            Activity: activity.name,
-            Code: activity.code,
-            Category: activity.category ?? "Uncategorized",
-            Participants: activityCountByCode.get(activity.code.toLowerCase())
-              ?? activityCountByName.get(activity.name.toLowerCase())
-              ?? 0,
-          }))
-          : [{ Activity: "No data", Code: "", Category: "", Participants: 0 }]
-      );
-      XLSX.utils.book_append_sheet(workbook, activityParticipationSheet, "Activities");
-
-      const activitiesCountSheet = XLSX.utils.json_to_sheet(
-        activityCountRows.length > 0
-          ? activityCountRows
-          : [{ Activity: "No data", Code: "", Category: "", Count: 0 }]
-      );
-      XLSX.utils.book_append_sheet(workbook, activitiesCountSheet, "Activities Count");
-
-      const activityCategorySheet = XLSX.utils.json_to_sheet(
-        categoryCountRows.length > 0
-          ? categoryCountRows
-          : [{ Category: "No data", Count: 0 }]
-      );
-      XLSX.utils.book_append_sheet(workbook, activityCategorySheet, "Activity Categories");
-
       const activityTimelineSheet = XLSX.utils.json_to_sheet(
         activityTimelineRows.length > 0
-          ? activityTimelineRows
-          : [{ Hour: "No data", Records: 0 }]
+          ? activityTimelineRows.map((r) => ({ Hour: r.Hour, ActivityRecords: r.Records }))
+          : [{ Hour: "No data", ActivityRecords: 0 }]
       );
       XLSX.utils.book_append_sheet(workbook, activityTimelineSheet, "Activity Timeline");
-
-      const recentActivitySheet = XLSX.utils.json_to_sheet(
-        stats.recentLogs.length > 0
-          ? stats.recentLogs.map((log) => ({
-            ParticipantCode: log.participant_code,
-            ParticipantName: log.participants?.name ?? "Unknown",
-            Experience: log.experience,
-            RecordedAt: log.recorded_at,
-          }))
-          : [{ ParticipantCode: "No data", ParticipantName: "", Experience: "", RecordedAt: "" }]
-      );
-      XLSX.utils.book_append_sheet(workbook, recentActivitySheet, "Recent Activity");
-
-      const walkInDetailsSheet = XLSX.utils.json_to_sheet(
-        consolidatedWalkInTotal > 0
-          ? [
-            ...walkInParticipants.map((row) => ({
-              Type: "Participant",
-              Code: row.code,
-              NameOrBrand: row.name,
-              TeamOrContact: "",
-              Phone: row.phone ?? "",
-              CheckInMethod: row.check_in_method ?? "",
-              CheckedIn: row.is_checked_in ? "Yes" : "No",
-              CheckedInAt: row.checked_in_at ?? "",
-            })),
-            ...walkInCrew.map((row) => ({
-              Type: "Crew",
-              Code: row.code,
-              NameOrBrand: row.name,
-              TeamOrContact: row.department ?? row.team_name ?? "",
-              Phone: row.phone ?? "",
-              CheckInMethod: row.check_in_method ?? "",
-              CheckedIn: row.is_checked_in ? "Yes" : "No",
-              CheckedInAt: row.checked_in_at ?? "",
-            })),
-            ...walkInServiceProviders.map((row) => ({
-              Type: "Service Provider",
-              Code: row.code,
-              NameOrBrand: row.brand_name,
-              TeamOrContact: row.contact_person ?? "",
-              Phone: row.phone ?? "",
-              CheckInMethod: row.check_in_method ?? "",
-              CheckedIn: row.is_checked_in ? "Yes" : "No",
-              CheckedInAt: row.checked_in_at ?? "",
-            })),
-          ]
-          : [{ Type: "No walk-ins", Code: "", NameOrBrand: "", TeamOrContact: "", Phone: "", CheckInMethod: "", CheckedIn: "", CheckedInAt: "" }]
-      );
-      XLSX.utils.book_append_sheet(workbook, walkInDetailsSheet, "Walk-Ins");
-
-      const scanRecoverySheet = XLSX.utils.json_to_sheet(
-        scanRecoveryParticipants.length > 0
-          ? scanRecoveryParticipants.map((row) => ({
-            Code: row.code,
-            Name: row.name,
-            Phone: row.phone ?? "",
-            Source: row.source ?? "",
-            CheckInMethod: row.check_in_method ?? "",
-            CheckedIn: row.is_checked_in ? "Yes" : "No",
-            CheckedInAt: row.checked_in_at ?? "",
-          }))
-          : [{ Code: "No scan-failure recovery records", Name: "", Phone: "", Source: "", CheckInMethod: "", CheckedIn: "", CheckedInAt: "" }]
-      );
-      XLSX.utils.book_append_sheet(workbook, scanRecoverySheet, "Scan Failure Recovery");
 
       const rawRecordsSheet = XLSX.utils.json_to_sheet(
         consolidatedRawRecords.length > 0
           ? consolidatedRawRecords
-          : [{ SourceTable: "No data", RecordId: "", ParticipantCode: "", ParticipantName: "", ConsolidatedActivity: "", ActivityCode: "", Category: "", Timestamp: "" }]
+            .sort((a, b) => (b.Timestamp || "").localeCompare(a.Timestamp || ""))
+            .map((record) => ({
+              Participant: record.ParticipantName,
+              ConsolidatedActivity: record.ConsolidatedActivity,
+              RawActivity: record.RawActivity,
+              Group: record.Category,
+              RecordedAt: record.Timestamp ? new Date(record.Timestamp).toLocaleString() : "",
+              RecordedBy: record.RecordedBy,
+              Notes: record.Notes,
+            }))
+          : [{ Participant: "No data", ConsolidatedActivity: "", RawActivity: "", Group: "", RecordedAt: "", RecordedBy: "", Notes: "" }]
       );
       XLSX.utils.book_append_sheet(workbook, rawRecordsSheet, "Raw Records");
 
