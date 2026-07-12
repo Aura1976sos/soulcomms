@@ -486,10 +486,6 @@ export default function Dashboard() {
         ...consolidated.serviceProviderRows,
       ].filter((row) => row.is_checked_in).length;
 
-      const avgExperiences = stats.uniqueParticipantsEngaged > 0
-        ? Number((stats.totalExperiences / stats.uniqueParticipantsEngaged).toFixed(1))
-        : 0;
-
       const activityById = new Map(
         activityExport.activitiesRows.map((activity) => [activity.id, activity] as const)
       );
@@ -588,18 +584,45 @@ export default function Dashboard() {
           CheckedInAt: row.checked_in_at ?? "",
         }));
 
+      const registeredParticipants = consolidated.participantRows.length;
+      const checkedInParticipants = participantCheckinLogRows.length;
+      const uniqueParticipantsEngaged = new Set(
+        consolidatedRawRecords.map((record) => record.ParticipantCode).filter(Boolean)
+      ).size;
+      const totalExperiences = consolidatedRawRecords.length;
+      const avgExperiences = uniqueParticipantsEngaged > 0
+        ? Number((totalExperiences / uniqueParticipantsEngaged).toFixed(1))
+        : 0;
+
+      const checkinHourMap = new Map<string, number>();
+      participantCheckinLogRows.forEach((row) => {
+        if (!row.CheckedInAt) return;
+        const dt = new Date(row.CheckedInAt);
+        if (Number.isNaN(dt.getTime())) return;
+        const hour = `${String(dt.getHours()).padStart(2, "0")}:00`;
+        checkinHourMap.set(hour, (checkinHourMap.get(hour) ?? 0) + 1);
+      });
+      const checkinHourRows = Array.from(checkinHourMap.entries())
+        .map(([hour, count]) => ({ Hour: hour, Checkins: count }))
+        .sort((a, b) => a.Hour.localeCompare(b.Hour));
+
+      const peakCheckin = [...checkinHourRows].sort((a, b) => b.Checkins - a.Checkins)[0];
+      const peakActivityTime = [...activityTimelineRows].sort((a, b) => b.Records - a.Records)[0];
+      const peakActivity = activityCountRows[0];
+
       const summarySheet = XLSX.utils.json_to_sheet([
         { Metric: "Event", Value: currentEventName ?? "N/A" },
         { Metric: "Generated At", Value: generatedAt },
-        { Metric: "Registered Participants", Value: stats.totalRegistered },
-        { Metric: "Checked-In Participants", Value: stats.checkedIn },
-        { Metric: "Unique Participants Engaged", Value: stats.uniqueParticipantsEngaged },
-        { Metric: "Total Experiences", Value: stats.totalExperiences },
+        { Metric: "Registered Participants", Value: registeredParticipants },
+        { Metric: "Checked-In Participants", Value: checkedInParticipants },
+        { Metric: "Unique Participants Engaged", Value: uniqueParticipantsEngaged },
+        { Metric: "Total Experiences", Value: totalExperiences },
         { Metric: "Avg Experiences / Participant", Value: avgExperiences },
-        { Metric: "Peak Check-In Time", Value: stats.peakCheckinHourLabel },
-        { Metric: "Peak Check-In Count", Value: stats.peakCheckinHourCount },
-        { Metric: "Peak Activity Time", Value: stats.peakHourLabel },
-        { Metric: "Peak Activity Count", Value: stats.peakHourCount },
+        { Metric: "Peak Check-In Time", Value: peakCheckin?.Hour ?? "—" },
+        { Metric: "Peak Check-In Count", Value: peakCheckin?.Checkins ?? 0 },
+        { Metric: "Peak Activity Time", Value: peakActivityTime?.Hour ?? "—" },
+        { Metric: "Peak Activity Count", Value: peakActivityTime?.Records ?? 0 },
+        { Metric: "Peak Activity", Value: peakActivity ? `${peakActivity.Activity} (${peakActivity.Count})` : "—" },
         { Metric: "All Attendees Registered (Participants + Crew + Service Providers)", Value: allAttendeesRegistered },
         { Metric: "All Attendees Checked-In (Participants + Crew + Service Providers)", Value: allAttendeesCheckedIn },
         { Metric: "Walk-In Participants", Value: walkInParticipants.length },
@@ -610,7 +633,33 @@ export default function Dashboard() {
       ]);
       XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
 
-      const consolidatedSummarySheet = XLSX.utils.json_to_sheet([
+      const consolidatedSummaryRows: Array<{ Section: string; Metric: string; Value: string | number }> = [
+        { Section: "Overview", Metric: "Participants Registered", Value: registeredParticipants },
+        { Section: "Overview", Metric: "Participants Checked-In", Value: checkedInParticipants },
+        { Section: "Overview", Metric: "Unique Participants Engaged", Value: uniqueParticipantsEngaged },
+        { Section: "Overview", Metric: "Total Experience Records", Value: totalExperiences },
+        { Section: "Overview", Metric: "Avg Experiences / Participant", Value: avgExperiences },
+        { Section: "Peaks", Metric: "Peak Check-In Time", Value: peakCheckin?.Hour ?? "—" },
+        { Section: "Peaks", Metric: "Peak Check-In Count", Value: peakCheckin?.Checkins ?? 0 },
+        { Section: "Peaks", Metric: "Peak Activity Time", Value: peakActivityTime?.Hour ?? "—" },
+        { Section: "Peaks", Metric: "Peak Activity Count", Value: peakActivityTime?.Records ?? 0 },
+        { Section: "Peaks", Metric: "Peak Activity", Value: peakActivity ? `${peakActivity.Activity} (${peakActivity.Count})` : "—" },
+        { Section: "Attendance", Metric: "All Attendees Registered", Value: allAttendeesRegistered },
+        { Section: "Attendance", Metric: "All Attendees Checked-In", Value: allAttendeesCheckedIn },
+        { Section: "Attendance", Metric: "Total Walk-Ins", Value: consolidatedWalkInTotal },
+        { Section: "Attendance", Metric: "Recovered From Scan Failure", Value: scanRecoveryParticipants.length },
+      ];
+
+      consolidatedSummaryRows.push(...categoryCountRows.map((row) => ({
+        Section: "Activity Categories",
+        Metric: row.Category,
+        Value: row.Count,
+      })));
+
+      const consolidatedSummarySheet = XLSX.utils.json_to_sheet(consolidatedSummaryRows);
+      XLSX.utils.book_append_sheet(workbook, consolidatedSummarySheet, "Consolidated Report");
+
+      const consolidatedByTypeSheet = XLSX.utils.json_to_sheet([
         {
           Category: "Participants",
           Registered: consolidated.participantRows.length,
@@ -640,11 +689,11 @@ export default function Dashboard() {
           ScanRecovery: scanRecoveryParticipants.length,
         },
       ]);
-      XLSX.utils.book_append_sheet(workbook, consolidatedSummarySheet, "Consolidated Event Summary");
+      XLSX.utils.book_append_sheet(workbook, consolidatedByTypeSheet, "Consolidated Event Summary");
 
       const checkinHoursSheet = XLSX.utils.json_to_sheet(
-        stats.peakCheckinHourBuckets.length > 0
-          ? stats.peakCheckinHourBuckets.map((bucket) => ({ Hour: bucket.hour, Checkins: bucket.count }))
+        checkinHourRows.length > 0
+          ? checkinHourRows
           : [{ Hour: "No data", Checkins: 0 }]
       );
       XLSX.utils.book_append_sheet(workbook, checkinHoursSheet, "Checkin Hours");
@@ -657,11 +706,14 @@ export default function Dashboard() {
       XLSX.utils.book_append_sheet(workbook, participantCheckinSheet, "Check-In Log");
 
       const activityHoursSheet = XLSX.utils.json_to_sheet(
-        stats.peakHourBuckets.length > 0
-          ? stats.peakHourBuckets.map((bucket) => ({ Hour: bucket.hour, Records: bucket.count }))
+        activityTimelineRows.length > 0
+          ? activityTimelineRows
           : [{ Hour: "No data", Records: 0 }]
       );
       XLSX.utils.book_append_sheet(workbook, activityHoursSheet, "Activity Hours");
+
+      const activityCountByCode = new Map(activityCountRows.map((row) => [row.Code.toLowerCase(), row.Count] as const));
+      const activityCountByName = new Map(activityCountRows.map((row) => [row.Activity.toLowerCase(), row.Count] as const));
 
       const activityParticipationSheet = XLSX.utils.json_to_sheet(
         activities.length > 0
@@ -669,7 +721,9 @@ export default function Dashboard() {
             Activity: activity.name,
             Code: activity.code,
             Category: activity.category ?? "Uncategorized",
-            Participants: stats.effectiveCounts[activity.id] ?? 0,
+            Participants: activityCountByCode.get(activity.code.toLowerCase())
+              ?? activityCountByName.get(activity.name.toLowerCase())
+              ?? 0,
           }))
           : [{ Activity: "No data", Code: "", Category: "", Participants: 0 }]
       );
