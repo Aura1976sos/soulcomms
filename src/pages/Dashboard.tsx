@@ -79,10 +79,38 @@ interface ConsolidatedExportData {
   }>;
 }
 
+interface ActivityExportData {
+  activitiesRows: Array<{
+    id: string;
+    name: string;
+    code: string;
+    category: string | null;
+    manual_count: number | null;
+  }>;
+  activityLogRows: Array<{
+    id: string;
+    participant_code: string;
+    participant_id: string | null;
+    experience: string;
+    activity_id: string | null;
+    recorded_at: string | null;
+    participants: { name: string } | null;
+  }>;
+  sessionParticipationRows: Array<{
+    id: string;
+    participant_code: string;
+    participant_name: string;
+    activity_id: string;
+    generated_at: string | null;
+    verified_at: string | null;
+    status: string | null;
+  }>;
+}
+
 export default function Dashboard() {
   const { activeEvent, lastEventSync, triggerEventCacheSync } = useEvent();
   const { online, refreshPending } = useNetwork();
-  const { activeActivities } = useActivities();
+  const { activeActivities, activities } = useActivities();
   const { role } = useAuth();
   const { guestSession, isGuestMode } = useGuest();
   const isAdmin = role === "admin" || role === "event_admin";
@@ -342,6 +370,37 @@ export default function Dashboard() {
     };
   }, [currentEventId]);
 
+  const fetchActivityExportData = useCallback(async (): Promise<ActivityExportData> => {
+    if (!currentEventId) {
+      return { activitiesRows: [], activityLogRows: [], sessionParticipationRows: [] };
+    }
+
+    const [activitiesRes, activityLogsRes, sessionParticipationRes] = await Promise.all([
+      supabase
+        .from("activities")
+        .select("id, name, code, category, manual_count")
+        .eq("event_id", currentEventId),
+      supabase
+        .from("activity_logs")
+        .select("id, participant_code, participant_id, experience, activity_id, recorded_at, participants(name)")
+        .eq("event_id", currentEventId),
+      supabase
+        .from("session_participations")
+        .select("id, participant_code, participant_name, activity_id, generated_at, verified_at, status")
+        .eq("event_id", currentEventId),
+    ]);
+
+    if (activitiesRes.error) throw new Error(activitiesRes.error.message);
+    if (activityLogsRes.error) throw new Error(activityLogsRes.error.message);
+    if (sessionParticipationRes.error) throw new Error(sessionParticipationRes.error.message);
+
+    return {
+      activitiesRows: (activitiesRes.data ?? []) as ActivityExportData["activitiesRows"],
+      activityLogRows: (activityLogsRes.data ?? []) as ActivityExportData["activityLogRows"],
+      sessionParticipationRows: (sessionParticipationRes.data ?? []) as ActivityExportData["sessionParticipationRows"],
+    };
+  }, [currentEventId]);
+
   const handleExportPng = async () => {
     if (!captureRef.current) return;
     setExporting("png");
@@ -401,6 +460,7 @@ export default function Dashboard() {
       const workbook = XLSX.utils.book_new();
       const generatedAt = new Date().toLocaleString();
       const consolidated = await fetchConsolidatedExportData();
+      const activityExport = await fetchActivityExportData();
 
       const walkInParticipants = consolidated.participantRows.filter((row) => row.source === "Walk-In");
       const scanRecoveryParticipants = consolidated.participantRows.filter((row) => row.source === "QR Registration");
@@ -419,6 +479,104 @@ export default function Dashboard() {
       const avgExperiences = stats.uniqueParticipantsEngaged > 0
         ? Number((stats.totalExperiences / stats.uniqueParticipantsEngaged).toFixed(1))
         : 0;
+
+      const activityById = new Map(
+        activityExport.activitiesRows.map((activity) => [activity.id, activity] as const)
+      );
+      const activityByCode = new Map(
+        activityExport.activitiesRows.map((activity) => [activity.code.toLowerCase(), activity] as const)
+      );
+      const activityByName = new Map(
+        activityExport.activitiesRows.map((activity) => [activity.name.toLowerCase(), activity] as const)
+      );
+
+      const resolveActivity = (activityId: string | null, fallback: string | null) => {
+        if (activityId && activityById.has(activityId)) return activityById.get(activityId);
+        if (!fallback) return undefined;
+        const normalized = fallback.toLowerCase().trim();
+        if (activityByCode.has(normalized)) return activityByCode.get(normalized);
+        if (activityByName.has(normalized)) return activityByName.get(normalized);
+        return undefined;
+      };
+
+      const consolidatedRawRecords = [
+        ...activityExport.activityLogRows.map((row) => {
+          const resolved = resolveActivity(row.activity_id, row.experience);
+          return {
+            SourceTable: "activity_logs",
+            RecordId: row.id,
+            ParticipantCode: row.participant_code,
+            ParticipantName: row.participants?.name ?? "Unknown",
+            ConsolidatedActivity: resolved?.name ?? row.experience,
+            ActivityCode: resolved?.code ?? row.experience,
+            Category: resolved?.category ?? "Uncategorized",
+            Timestamp: row.recorded_at ?? "",
+          };
+        }),
+        ...activityExport.sessionParticipationRows.map((row) => {
+          const resolved = resolveActivity(row.activity_id, null);
+          return {
+            SourceTable: "session_participations",
+            RecordId: row.id,
+            ParticipantCode: row.participant_code,
+            ParticipantName: row.participant_name,
+            ConsolidatedActivity: resolved?.name ?? row.activity_id,
+            ActivityCode: resolved?.code ?? row.activity_id,
+            Category: resolved?.category ?? "Uncategorized",
+            Timestamp: row.verified_at ?? row.generated_at ?? "",
+          };
+        }),
+      ];
+
+      const activityCountMap = new Map<string, { activity: string; code: string; category: string; count: number }>();
+      consolidatedRawRecords.forEach((record) => {
+        const key = `${record.ActivityCode}::${record.ConsolidatedActivity}`;
+        const existing = activityCountMap.get(key) ?? {
+          activity: record.ConsolidatedActivity,
+          code: record.ActivityCode,
+          category: record.Category,
+          count: 0,
+        };
+        existing.count += 1;
+        activityCountMap.set(key, existing);
+      });
+
+      const activityCountRows = Array.from(activityCountMap.values())
+        .sort((a, b) => b.count - a.count)
+        .map((row) => ({ Activity: row.activity, Code: row.code, Category: row.category, Count: row.count }));
+
+      const categoryCountMap = new Map<string, number>();
+      activityCountRows.forEach((row) => {
+        const category = row.Category || "Uncategorized";
+        categoryCountMap.set(category, (categoryCountMap.get(category) ?? 0) + row.Count);
+      });
+      const categoryCountRows = Array.from(categoryCountMap.entries())
+        .map(([category, count]) => ({ Category: category, Count: count }))
+        .sort((a, b) => b.Count - a.Count);
+
+      const timelineMap = new Map<string, number>();
+      consolidatedRawRecords.forEach((record) => {
+        if (!record.Timestamp) return;
+        const dt = new Date(record.Timestamp);
+        if (Number.isNaN(dt.getTime())) return;
+        const hour = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} ${String(dt.getHours()).padStart(2, "0")}:00`;
+        timelineMap.set(hour, (timelineMap.get(hour) ?? 0) + 1);
+      });
+      const activityTimelineRows = Array.from(timelineMap.entries())
+        .map(([hour, records]) => ({ Hour: hour, Records: records }))
+        .sort((a, b) => a.Hour.localeCompare(b.Hour));
+
+      const participantCheckinLogRows = consolidated.participantRows
+        .filter((row) => row.is_checked_in)
+        .sort((a, b) => (a.checked_in_at ?? "").localeCompare(b.checked_in_at ?? ""))
+        .map((row) => ({
+          ParticipantCode: row.code,
+          ParticipantName: row.name,
+          Phone: row.phone ?? "",
+          Source: row.source ?? "",
+          CheckInMethod: row.check_in_method ?? "",
+          CheckedInAt: row.checked_in_at ?? "",
+        }));
 
       const summarySheet = XLSX.utils.json_to_sheet([
         { Metric: "Event", Value: currentEventName ?? "N/A" },
@@ -481,6 +639,13 @@ export default function Dashboard() {
       );
       XLSX.utils.book_append_sheet(workbook, checkinHoursSheet, "Checkin Hours");
 
+      const participantCheckinSheet = XLSX.utils.json_to_sheet(
+        participantCheckinLogRows.length > 0
+          ? participantCheckinLogRows
+          : [{ ParticipantCode: "No checked-in participants", ParticipantName: "", Phone: "", Source: "", CheckInMethod: "", CheckedInAt: "" }]
+      );
+      XLSX.utils.book_append_sheet(workbook, participantCheckinSheet, "Check-In Log");
+
       const activityHoursSheet = XLSX.utils.json_to_sheet(
         stats.peakHourBuckets.length > 0
           ? stats.peakHourBuckets.map((bucket) => ({ Hour: bucket.hour, Records: bucket.count }))
@@ -489,15 +654,37 @@ export default function Dashboard() {
       XLSX.utils.book_append_sheet(workbook, activityHoursSheet, "Activity Hours");
 
       const activityParticipationSheet = XLSX.utils.json_to_sheet(
-        activeActivities.length > 0
-          ? activeActivities.map((activity) => ({
+        activities.length > 0
+          ? activities.map((activity) => ({
             Activity: activity.name,
             Code: activity.code,
+            Category: activity.category ?? "Uncategorized",
             Participants: stats.effectiveCounts[activity.id] ?? 0,
           }))
-          : [{ Activity: "No data", Code: "", Participants: 0 }]
+          : [{ Activity: "No data", Code: "", Category: "", Participants: 0 }]
       );
       XLSX.utils.book_append_sheet(workbook, activityParticipationSheet, "Activities");
+
+      const activitiesCountSheet = XLSX.utils.json_to_sheet(
+        activityCountRows.length > 0
+          ? activityCountRows
+          : [{ Activity: "No data", Code: "", Category: "", Count: 0 }]
+      );
+      XLSX.utils.book_append_sheet(workbook, activitiesCountSheet, "Activities Count");
+
+      const activityCategorySheet = XLSX.utils.json_to_sheet(
+        categoryCountRows.length > 0
+          ? categoryCountRows
+          : [{ Category: "No data", Count: 0 }]
+      );
+      XLSX.utils.book_append_sheet(workbook, activityCategorySheet, "Activity Categories");
+
+      const activityTimelineSheet = XLSX.utils.json_to_sheet(
+        activityTimelineRows.length > 0
+          ? activityTimelineRows
+          : [{ Hour: "No data", Records: 0 }]
+      );
+      XLSX.utils.book_append_sheet(workbook, activityTimelineSheet, "Activity Timeline");
 
       const recentActivitySheet = XLSX.utils.json_to_sheet(
         stats.recentLogs.length > 0
@@ -563,6 +750,13 @@ export default function Dashboard() {
           : [{ Code: "No scan-failure recovery records", Name: "", Phone: "", Source: "", CheckInMethod: "", CheckedIn: "", CheckedInAt: "" }]
       );
       XLSX.utils.book_append_sheet(workbook, scanRecoverySheet, "Scan Failure Recovery");
+
+      const rawRecordsSheet = XLSX.utils.json_to_sheet(
+        consolidatedRawRecords.length > 0
+          ? consolidatedRawRecords
+          : [{ SourceTable: "No data", RecordId: "", ParticipantCode: "", ParticipantName: "", ConsolidatedActivity: "", ActivityCode: "", Category: "", Timestamp: "" }]
+      );
+      XLSX.utils.book_append_sheet(workbook, rawRecordsSheet, "Raw Records");
 
       XLSX.writeFile(workbook, `${safeFileBase}_dashboard.xlsx`);
     } catch (error) {
