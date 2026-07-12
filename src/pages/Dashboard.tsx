@@ -46,6 +46,39 @@ interface DashboardStats {
   }>;
 }
 
+interface ConsolidatedExportData {
+  participantRows: Array<{
+    id: string;
+    code: string;
+    name: string;
+    phone: string | null;
+    source: string | null;
+    is_checked_in: boolean;
+    check_in_method: string | null;
+    checked_in_at: string | null;
+  }>;
+  crewRows: Array<{
+    id: string;
+    code: string;
+    name: string;
+    team_name: string | null;
+    phone: string | null;
+    is_checked_in: boolean;
+    check_in_method: string | null;
+    checked_in_at: string | null;
+  }>;
+  serviceProviderRows: Array<{
+    id: string;
+    code: string;
+    brand_name: string;
+    contact_person: string | null;
+    phone: string | null;
+    is_checked_in: boolean;
+    check_in_method: string | null;
+    checked_in_at: string | null;
+  }>;
+}
+
 export default function Dashboard() {
   const { activeEvent, lastEventSync, triggerEventCacheSync } = useEvent();
   const { online, refreshPending } = useNetwork();
@@ -278,6 +311,37 @@ export default function Dashboard() {
 
   const safeFileBase = currentEventName?.trim().replace(/[^a-z0-9]+/gi, "_") || "dashboard_analytics";
 
+  const fetchConsolidatedExportData = useCallback(async (): Promise<ConsolidatedExportData> => {
+    if (!currentEventId) {
+      return { participantRows: [], crewRows: [], serviceProviderRows: [] };
+    }
+
+    const [participantsRes, crewRes, serviceProvidersRes] = await Promise.all([
+      supabase
+        .from("participants")
+        .select("id, code, name, phone, source, is_checked_in, check_in_method, checked_in_at")
+        .eq("event_id", currentEventId),
+      supabase
+        .from("crew_members")
+        .select("id, code, name, team_name, phone, is_checked_in, check_in_method, checked_in_at")
+        .eq("event_id", currentEventId),
+      supabase
+        .from("service_providers")
+        .select("id, code, brand_name, contact_person, phone, is_checked_in, check_in_method, checked_in_at")
+        .eq("event_id", currentEventId),
+    ]);
+
+    if (participantsRes.error) throw new Error(participantsRes.error.message);
+    if (crewRes.error) throw new Error(crewRes.error.message);
+    if (serviceProvidersRes.error) throw new Error(serviceProvidersRes.error.message);
+
+    return {
+      participantRows: (participantsRes.data ?? []) as ConsolidatedExportData["participantRows"],
+      crewRows: (crewRes.data ?? []) as ConsolidatedExportData["crewRows"],
+      serviceProviderRows: (serviceProvidersRes.data ?? []) as ConsolidatedExportData["serviceProviderRows"],
+    };
+  }, [currentEventId]);
+
   const handleExportPng = async () => {
     if (!captureRef.current) return;
     setExporting("png");
@@ -336,6 +400,22 @@ export default function Dashboard() {
       const XLSX = await import("xlsx");
       const workbook = XLSX.utils.book_new();
       const generatedAt = new Date().toLocaleString();
+      const consolidated = await fetchConsolidatedExportData();
+
+      const walkInParticipants = consolidated.participantRows.filter((row) => row.source === "Walk-In");
+      const scanRecoveryParticipants = consolidated.participantRows.filter((row) => row.source === "QR Registration");
+      const walkInCrew = consolidated.crewRows.filter((row) => row.check_in_method === "Walk-In Registration");
+      const walkInServiceProviders = consolidated.serviceProviderRows.filter((row) => row.check_in_method === "Walk-In Registration");
+
+      const consolidatedWalkInTotal = walkInParticipants.length + walkInCrew.length + walkInServiceProviders.length;
+
+      const allAttendeesRegistered = consolidated.participantRows.length + consolidated.crewRows.length + consolidated.serviceProviderRows.length;
+      const allAttendeesCheckedIn = [
+        ...consolidated.participantRows,
+        ...consolidated.crewRows,
+        ...consolidated.serviceProviderRows,
+      ].filter((row) => row.is_checked_in).length;
+
       const avgExperiences = stats.uniqueParticipantsEngaged > 0
         ? Number((stats.totalExperiences / stats.uniqueParticipantsEngaged).toFixed(1))
         : 0;
@@ -352,8 +432,47 @@ export default function Dashboard() {
         { Metric: "Peak Check-In Count", Value: stats.peakCheckinHourCount },
         { Metric: "Peak Activity Time", Value: stats.peakHourLabel },
         { Metric: "Peak Activity Count", Value: stats.peakHourCount },
+        { Metric: "All Attendees Registered (Participants + Crew + Service Providers)", Value: allAttendeesRegistered },
+        { Metric: "All Attendees Checked-In (Participants + Crew + Service Providers)", Value: allAttendeesCheckedIn },
+        { Metric: "Walk-In Participants", Value: walkInParticipants.length },
+        { Metric: "Walk-In Crew", Value: walkInCrew.length },
+        { Metric: "Walk-In Service Providers", Value: walkInServiceProviders.length },
+        { Metric: "Total Walk-Ins (Consolidated)", Value: consolidatedWalkInTotal },
+        { Metric: "Recovered From Scan Failure (QR Registration)", Value: scanRecoveryParticipants.length },
       ]);
       XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+
+      const consolidatedSummarySheet = XLSX.utils.json_to_sheet([
+        {
+          Category: "Participants",
+          Registered: consolidated.participantRows.length,
+          CheckedIn: consolidated.participantRows.filter((row) => row.is_checked_in).length,
+          WalkIns: walkInParticipants.length,
+          ScanRecovery: scanRecoveryParticipants.length,
+        },
+        {
+          Category: "Crew",
+          Registered: consolidated.crewRows.length,
+          CheckedIn: consolidated.crewRows.filter((row) => row.is_checked_in).length,
+          WalkIns: walkInCrew.length,
+          ScanRecovery: 0,
+        },
+        {
+          Category: "Service Providers",
+          Registered: consolidated.serviceProviderRows.length,
+          CheckedIn: consolidated.serviceProviderRows.filter((row) => row.is_checked_in).length,
+          WalkIns: walkInServiceProviders.length,
+          ScanRecovery: 0,
+        },
+        {
+          Category: "TOTAL",
+          Registered: allAttendeesRegistered,
+          CheckedIn: allAttendeesCheckedIn,
+          WalkIns: consolidatedWalkInTotal,
+          ScanRecovery: scanRecoveryParticipants.length,
+        },
+      ]);
+      XLSX.utils.book_append_sheet(workbook, consolidatedSummarySheet, "Consolidated Event Summary");
 
       const checkinHoursSheet = XLSX.utils.json_to_sheet(
         stats.peakCheckinHourBuckets.length > 0
@@ -391,6 +510,59 @@ export default function Dashboard() {
           : [{ ParticipantCode: "No data", ParticipantName: "", Experience: "", RecordedAt: "" }]
       );
       XLSX.utils.book_append_sheet(workbook, recentActivitySheet, "Recent Activity");
+
+      const walkInDetailsSheet = XLSX.utils.json_to_sheet(
+        consolidatedWalkInTotal > 0
+          ? [
+            ...walkInParticipants.map((row) => ({
+              Type: "Participant",
+              Code: row.code,
+              NameOrBrand: row.name,
+              TeamOrContact: "",
+              Phone: row.phone ?? "",
+              CheckInMethod: row.check_in_method ?? "",
+              CheckedIn: row.is_checked_in ? "Yes" : "No",
+              CheckedInAt: row.checked_in_at ?? "",
+            })),
+            ...walkInCrew.map((row) => ({
+              Type: "Crew",
+              Code: row.code,
+              NameOrBrand: row.name,
+              TeamOrContact: row.team_name ?? "",
+              Phone: row.phone ?? "",
+              CheckInMethod: row.check_in_method ?? "",
+              CheckedIn: row.is_checked_in ? "Yes" : "No",
+              CheckedInAt: row.checked_in_at ?? "",
+            })),
+            ...walkInServiceProviders.map((row) => ({
+              Type: "Service Provider",
+              Code: row.code,
+              NameOrBrand: row.brand_name,
+              TeamOrContact: row.contact_person ?? "",
+              Phone: row.phone ?? "",
+              CheckInMethod: row.check_in_method ?? "",
+              CheckedIn: row.is_checked_in ? "Yes" : "No",
+              CheckedInAt: row.checked_in_at ?? "",
+            })),
+          ]
+          : [{ Type: "No walk-ins", Code: "", NameOrBrand: "", TeamOrContact: "", Phone: "", CheckInMethod: "", CheckedIn: "", CheckedInAt: "" }]
+      );
+      XLSX.utils.book_append_sheet(workbook, walkInDetailsSheet, "Walk-Ins");
+
+      const scanRecoverySheet = XLSX.utils.json_to_sheet(
+        scanRecoveryParticipants.length > 0
+          ? scanRecoveryParticipants.map((row) => ({
+            Code: row.code,
+            Name: row.name,
+            Phone: row.phone ?? "",
+            Source: row.source ?? "",
+            CheckInMethod: row.check_in_method ?? "",
+            CheckedIn: row.is_checked_in ? "Yes" : "No",
+            CheckedInAt: row.checked_in_at ?? "",
+          }))
+          : [{ Code: "No scan-failure recovery records", Name: "", Phone: "", Source: "", CheckInMethod: "", CheckedIn: "", CheckedInAt: "" }]
+      );
+      XLSX.utils.book_append_sheet(workbook, scanRecoverySheet, "Scan Failure Recovery");
 
       XLSX.writeFile(workbook, `${safeFileBase}_dashboard.xlsx`);
     } catch (error) {
