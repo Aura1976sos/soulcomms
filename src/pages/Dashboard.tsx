@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { ExperienceGrid } from "@/components/dashboard/ExperienceGrid";
@@ -13,6 +13,7 @@ import { useActivities } from "@/contexts/ActivitiesContext";
 import {
   Users, UserCheck, Activity, Zap, RefreshCw, Download,
   CheckCircle, ListChecks, RotateCcw, BarChart2, TrendingUp, Clock3,
+  ImageIcon, FileText, Table2,
 } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -66,9 +67,11 @@ export default function Dashboard() {
   });
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
+  const [exporting, setExporting] = useState<"png" | "pdf" | "excel" | null>(null);
   const [cacheReady, setCacheReady] = useState(false);
   const [showReset, setShowReset] = useState(false);
   const [showChart, setShowChart] = useState(true);
+  const captureRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
   const fetchStats = useCallback(async () => {
@@ -273,12 +276,140 @@ export default function Dashboard() {
     }
   };
 
+  const safeFileBase = currentEventName?.trim().replace(/[^a-z0-9]+/gi, "_") || "dashboard_analytics";
+
+  const handleExportPng = async () => {
+    if (!captureRef.current) return;
+    setExporting("png");
+    try {
+      const { default: html2canvas } = await import("html2canvas");
+      const canvas = await html2canvas(captureRef.current, {
+        backgroundColor: window.getComputedStyle(document.body).backgroundColor,
+        scale: 1.5,
+        useCORS: true,
+        logging: false,
+      });
+      const link = document.createElement("a");
+      link.href = canvas.toDataURL("image/png");
+      link.download = `${safeFileBase}_dashboard.png`;
+      link.click();
+    } catch (error) {
+      toast({
+        title: "PNG export failed",
+        description: error instanceof Error ? error.message : "Could not export dashboard analytics.",
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!captureRef.current) return;
+    setExporting("pdf");
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
+      const canvas = await html2canvas(captureRef.current, {
+        backgroundColor: window.getComputedStyle(document.body).backgroundColor,
+        scale: 1.5,
+        useCORS: true,
+        logging: false,
+      });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF({ orientation: "landscape", unit: "px", format: [canvas.width / 2, canvas.height / 2] });
+      pdf.addImage(imgData, "PNG", 0, 0, canvas.width / 2, canvas.height / 2);
+      pdf.save(`${safeFileBase}_dashboard.pdf`);
+    } catch (error) {
+      toast({
+        title: "PDF export failed",
+        description: error instanceof Error ? error.message : "Could not export dashboard analytics.",
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    setExporting("excel");
+    try {
+      const XLSX = await import("xlsx");
+      const workbook = XLSX.utils.book_new();
+      const generatedAt = new Date().toLocaleString();
+      const avgExperiences = stats.uniqueParticipantsEngaged > 0
+        ? Number((stats.totalExperiences / stats.uniqueParticipantsEngaged).toFixed(1))
+        : 0;
+
+      const summarySheet = XLSX.utils.json_to_sheet([
+        { Metric: "Event", Value: currentEventName ?? "N/A" },
+        { Metric: "Generated At", Value: generatedAt },
+        { Metric: "Registered Participants", Value: stats.totalRegistered },
+        { Metric: "Checked-In Participants", Value: stats.checkedIn },
+        { Metric: "Unique Participants Engaged", Value: stats.uniqueParticipantsEngaged },
+        { Metric: "Total Experiences", Value: stats.totalExperiences },
+        { Metric: "Avg Experiences / Participant", Value: avgExperiences },
+        { Metric: "Peak Check-In Time", Value: stats.peakCheckinHourLabel },
+        { Metric: "Peak Check-In Count", Value: stats.peakCheckinHourCount },
+        { Metric: "Peak Activity Time", Value: stats.peakHourLabel },
+        { Metric: "Peak Activity Count", Value: stats.peakHourCount },
+      ]);
+      XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+
+      const checkinHoursSheet = XLSX.utils.json_to_sheet(
+        stats.peakCheckinHourBuckets.length > 0
+          ? stats.peakCheckinHourBuckets.map((bucket) => ({ Hour: bucket.hour, Checkins: bucket.count }))
+          : [{ Hour: "No data", Checkins: 0 }]
+      );
+      XLSX.utils.book_append_sheet(workbook, checkinHoursSheet, "Checkin Hours");
+
+      const activityHoursSheet = XLSX.utils.json_to_sheet(
+        stats.peakHourBuckets.length > 0
+          ? stats.peakHourBuckets.map((bucket) => ({ Hour: bucket.hour, Records: bucket.count }))
+          : [{ Hour: "No data", Records: 0 }]
+      );
+      XLSX.utils.book_append_sheet(workbook, activityHoursSheet, "Activity Hours");
+
+      const activityParticipationSheet = XLSX.utils.json_to_sheet(
+        activeActivities.length > 0
+          ? activeActivities.map((activity) => ({
+            Activity: activity.name,
+            Code: activity.code,
+            Participants: stats.effectiveCounts[activity.id] ?? 0,
+          }))
+          : [{ Activity: "No data", Code: "", Participants: 0 }]
+      );
+      XLSX.utils.book_append_sheet(workbook, activityParticipationSheet, "Activities");
+
+      const recentActivitySheet = XLSX.utils.json_to_sheet(
+        stats.recentLogs.length > 0
+          ? stats.recentLogs.map((log) => ({
+            ParticipantCode: log.participant_code,
+            ParticipantName: log.participants?.name ?? "Unknown",
+            Experience: log.experience,
+            RecordedAt: log.recorded_at,
+          }))
+          : [{ ParticipantCode: "No data", ParticipantName: "", Experience: "", RecordedAt: "" }]
+      );
+      XLSX.utils.book_append_sheet(workbook, recentActivitySheet, "Recent Activity");
+
+      XLSX.writeFile(workbook, `${safeFileBase}_dashboard.xlsx`);
+    } catch (error) {
+      toast({
+        title: "Excel export failed",
+        description: error instanceof Error ? error.message : "Could not export dashboard analytics.",
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <AppLayout
       title="Dashboard"
       subtitle={currentEventName ? `${currentEventName} · auto-refresh every 30s` : "Select an event"}
     >
-      <div className="space-y-6">
+      <div ref={captureRef} className="space-y-6">
         {/* Top actions */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           {online && (
@@ -307,6 +438,33 @@ export default function Dashboard() {
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             Refresh
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={handleExportPng}
+            disabled={exporting !== null}
+            className="gap-2 border-border text-muted-foreground hover:text-foreground"
+          >
+            <ImageIcon className="h-3.5 w-3.5" />
+            PNG
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={handleExportPdf}
+            disabled={exporting !== null}
+            className="gap-2 border-border text-muted-foreground hover:text-foreground"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            PDF
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={handleExportExcel}
+            disabled={exporting !== null}
+            className="gap-2 border-border text-muted-foreground hover:text-foreground"
+          >
+            <Table2 className="h-3.5 w-3.5" />
+            Excel
           </Button>
           {isAdmin && currentEventId && (
             <Button
