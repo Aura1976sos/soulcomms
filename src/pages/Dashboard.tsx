@@ -15,7 +15,7 @@ import {
   CheckCircle, ListChecks, RotateCcw, BarChart2, TrendingUp, Clock3,
   ImageIcon, FileText, Table2,
 } from "lucide-react";
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
+import { BarChart, Bar, Cell, LabelList, LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { ActivityBadge } from "@/components/shared/ActivityBadge";
@@ -25,6 +25,7 @@ import { ResetAttendanceModal } from "@/components/checkin/ResetAttendanceModal"
 interface DashboardStats {
   totalRegistered: number;
   checkedIn: number;
+  notCheckedIn: number;
   uniqueParticipantsEngaged: number;
   totalExperiences: number;
   // effectiveCounts: keyed by activity.id — already merged with manual_count
@@ -40,6 +41,15 @@ interface DashboardStats {
   scanFailedRecovered: number;
   walkInTotal: number;
   byGroup: Array<{ group: string; count: number }>;
+  activityRows: Array<{
+    id: string;
+    name: string;
+    group: string;
+    records: number;
+    uniquePax: number;
+    sessionsMerged: number;
+  }>;
+  groupTotals: Array<{ group: string; records: number; uniquePax: number }>;
   recentLogs: Array<{
     id: string;
     participant_code: string;
@@ -137,11 +147,11 @@ export default function Dashboard() {
   const currentEventName = isGuestMode ? guestSession?.eventName : activeEvent?.name;
 
   const [stats, setStats] = useState<DashboardStats>({
-    totalRegistered: 0, checkedIn: 0, uniqueParticipantsEngaged: 0,
+    totalRegistered: 0, checkedIn: 0, notCheckedIn: 0, uniqueParticipantsEngaged: 0,
     totalExperiences: 0, effectiveCounts: {}, peakActivityName: "No activity yet", peakActivityCount: 0,
     peakHourLabel: "—", peakHourCount: 0, peakHourBuckets: [],
     peakCheckinHourLabel: "—", peakCheckinHourCount: 0, peakCheckinHourBuckets: [],
-    scanFailedRecovered: 0, walkInTotal: 0, byGroup: [],
+    scanFailedRecovered: 0, walkInTotal: 0, byGroup: [], activityRows: [], groupTotals: [],
     recentLogs: [],
   });
   const [loading, setLoading] = useState(true);
@@ -163,6 +173,8 @@ export default function Dashboard() {
         { count: checkedIn },
         { data: recentLogs },
         { data: activityLogRows },
+        { data: activityLogDetailRows },
+        { data: sessionParticipationDetailRows },
         { data: checkinRows },
         { data: statsJson },
         { data: activitiesWithManual },
@@ -180,6 +192,12 @@ export default function Dashboard() {
           .limit(10),
         supabase.from("activity_logs")
           .select("experience, recorded_at")
+          .eq("event_id", eid),
+        supabase.from("activity_logs")
+          .select("activity_id, experience, participant_code")
+          .eq("event_id", eid),
+        supabase.from("session_participations")
+          .select("activity_id, participant_code, session_id")
           .eq("event_id", eid),
         supabase.from("participants")
           .select("checked_in_at")
@@ -199,19 +217,120 @@ export default function Dashboard() {
       const sessionCounts: Record<string, number> = (statsJson as { session_counts?: Record<string, number> } | null)?.session_counts ?? {};
       const uniqueParticipantsEngaged: number = (statsJson as { unique_participants?: number } | null)?.unique_participants ?? 0;
 
-      // Build effectiveCounts: prefer manual_count when set, otherwise sum both sources
+      // Build effectiveCounts: manual override always wins when present.
+      // Use both query result and context activities as fallback sources.
       const effectiveCounts: Record<string, number> = {};
+      const manualOverrideById = new Map<string, number>();
       (activitiesWithManual ?? []).forEach((a: { id: string; code: string; manual_count: number | null }) => {
-        const computed = (logCounts[a.id] ?? 0) + (sessionCounts[a.id] ?? 0);
-        effectiveCounts[a.id] = (a.manual_count !== null && a.manual_count !== undefined)
-          ? a.manual_count
-          : computed;
+        if (a.manual_count !== null && a.manual_count !== undefined) {
+          manualOverrideById.set(a.id, Number(a.manual_count) || 0);
+        }
+      });
+      (activities ?? []).forEach((a) => {
+        if (a.manual_count !== null && a.manual_count !== undefined) {
+          manualOverrideById.set(a.id, Number(a.manual_count) || 0);
+        }
+      });
+
+      const allActivityIds = new Set<string>([
+        ...Object.keys(logCounts),
+        ...Object.keys(sessionCounts),
+        ...(activitiesWithManual ?? []).map((a: { id: string }) => a.id),
+        ...activeActivities.map((a) => a.id),
+        ...activities.map((a) => a.id),
+      ]);
+
+      allActivityIds.forEach((activityId) => {
+        const computed = (logCounts[activityId] ?? 0) + (sessionCounts[activityId] ?? 0);
+        effectiveCounts[activityId] = manualOverrideById.get(activityId) ?? computed;
       });
 
       const totalExperiences = Object.values(effectiveCounts).reduce((s, n) => s + n, 0);
 
+      const eventActivities = activities.length > 0 ? activities : activeActivities;
+      const activityById = new Map(eventActivities.map((a) => [a.id, a] as const));
+      const activityByCode = new Map(eventActivities.map((a) => [a.code.toLowerCase(), a] as const));
+      const activityByName = new Map(eventActivities.map((a) => [a.name.toLowerCase(), a] as const));
+
+      const resolveActivity = (activityId: string | null | undefined, fallback?: string | null) => {
+        if (activityId && activityById.has(activityId)) return activityById.get(activityId);
+        if (!fallback) return undefined;
+        const normalized = fallback.toLowerCase().trim();
+        if (activityByCode.has(normalized)) return activityByCode.get(normalized);
+        if (activityByName.has(normalized)) return activityByName.get(normalized);
+        return undefined;
+      };
+
+      const rowsMap = new Map<string, {
+        id: string;
+        name: string;
+        group: string;
+        records: number;
+        uniqueCodes: Set<string>;
+        sessions: Set<string>;
+      }>();
+
+      eventActivities.forEach((a) => {
+        rowsMap.set(a.id, {
+          id: a.id,
+          name: a.name,
+          group: a.category?.trim() || "General",
+          records: 0,
+          uniqueCodes: new Set<string>(),
+          sessions: new Set<string>(),
+        });
+      });
+
+      (activityLogDetailRows ?? []).forEach((r: { activity_id: string | null; experience: string; participant_code: string | null }) => {
+        const resolved = resolveActivity(r.activity_id, r.experience);
+        if (!resolved) return;
+        const row = rowsMap.get(resolved.id);
+        if (!row) return;
+        row.records += 1;
+        const code = (r.participant_code ?? "").trim();
+        if (code) row.uniqueCodes.add(code);
+      });
+
+      (sessionParticipationDetailRows ?? []).forEach((r: { activity_id: string; participant_code: string | null; session_id: string | null }) => {
+        const resolved = resolveActivity(r.activity_id, null);
+        if (!resolved) return;
+        const row = rowsMap.get(resolved.id);
+        if (!row) return;
+        row.records += 1;
+        const code = (r.participant_code ?? "").trim();
+        if (code) row.uniqueCodes.add(code);
+        if (r.session_id) row.sessions.add(r.session_id);
+      });
+
+      const activityRows = Array.from(rowsMap.values())
+        .map((row) => {
+          // Use authoritative server/manual totals for displayed record counts.
+          const authoritativeRecords = effectiveCounts[row.id] ?? row.records;
+          return {
+            id: row.id,
+            name: row.name,
+            group: row.group,
+            records: authoritativeRecords,
+            uniquePax: row.uniqueCodes.size,
+            sessionsMerged: Math.max(1, row.sessions.size || 0),
+          };
+        })
+        .sort((a, b) => b.records - a.records);
+
+      const groupTotalsMap = new Map<string, { records: number; uniquePax: number }>();
+      activityRows.forEach((row) => {
+        const current = groupTotalsMap.get(row.group) ?? { records: 0, uniquePax: 0 };
+        current.records += row.records;
+        current.uniquePax += row.uniquePax;
+        groupTotalsMap.set(row.group, current);
+      });
+
+      const groupTotals = Array.from(groupTotalsMap.entries())
+        .map(([group, totals]) => ({ group, records: totals.records, uniquePax: totals.uniquePax }))
+        .sort((a, b) => b.records - a.records);
+
       const byGroupMap = new Map<string, number>();
-      activeActivities.forEach((activity) => {
+      eventActivities.forEach((activity) => {
         const key = activity.category?.trim() || "General";
         byGroupMap.set(key, (byGroupMap.get(key) ?? 0) + (effectiveCounts[activity.id] ?? 0));
       });
@@ -271,7 +390,7 @@ export default function Dashboard() {
       const peakHourChartData = hourBuckets.filter(bucket => bucket.count > 0);
       const peakHourLabel = peakHourBucket?.count ? new Date(`1970-01-01T${peakHourBucket.hour}`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—";
       const peakActivityName = peakExperience
-        ? activeActivities.find(a => a.id === peakExperience[0] || a.code === peakExperience[0])?.name ?? peakExperience[0]
+        ? eventActivities.find(a => a.id === peakExperience[0] || a.code === peakExperience[0])?.name ?? peakExperience[0]
         : "No activity yet";
 
       const checkinRowsData = (checkinRows ?? []) as Array<{ checked_in_at: string | null }>;
@@ -334,6 +453,7 @@ export default function Dashboard() {
       setStats({
         totalRegistered: displayTotalRegistered,
         checkedIn: displayCheckedIn,
+        notCheckedIn: Math.max(0, displayTotalRegistered - displayCheckedIn),
         uniqueParticipantsEngaged: displayUniqueParticipantsEngaged,
         totalExperiences: displayTotalExperiences,
         effectiveCounts,
@@ -348,6 +468,8 @@ export default function Dashboard() {
         scanFailedRecovered,
         walkInTotal,
         byGroup,
+        activityRows,
+        groupTotals,
         recentLogs: (recentLogs ?? []) as DashboardStats["recentLogs"],
       });
     } catch {
@@ -355,7 +477,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [currentEventId, activeActivities, toast]);
+  }, [currentEventId, activities, activeActivities, toast]);
 
   useEffect(() => {
     fetchStats();
@@ -490,13 +612,31 @@ export default function Dashboard() {
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
       const canvas = await html2canvas(captureRef.current, {
         backgroundColor: window.getComputedStyle(document.body).backgroundColor,
-        scale: 1.5,
+        scale: 2,
         useCORS: true,
         logging: false,
       });
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF({ orientation: "landscape", unit: "px", format: [canvas.width / 2, canvas.height / 2] });
-      pdf.addImage(imgData, "PNG", 0, 0, canvas.width / 2, canvas.height / 2);
+
+      const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+
+      const imgWidth = pageWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, position, imgWidth, imgHeight, undefined, "FAST");
+      heightLeft -= pageHeight;
+
+      while (heightLeft > 0) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, position, imgWidth, imgHeight, undefined, "FAST");
+        heightLeft -= pageHeight;
+      }
+
       pdf.save(`${safeFileBase}_dashboard.pdf`);
     } catch (error) {
       toast({
@@ -759,6 +899,7 @@ export default function Dashboard() {
         { Metric: "Unique Participants in Activities", Value: uniqueParticipantsEngaged },
         { Metric: "Activities Active", Value: activitiesSummaryRows.length },
         { Metric: "Top Activity (by unique pax)", Value: activitiesSummaryRows.sort((a, b) => b.UniqueParticipants - a.UniqueParticipants)[0]?.Activity ?? "—" },
+        { Metric: "Peak Activity", Value: peakActivity ? `${peakActivity.Activity} (${peakActivity.Count.toLocaleString()} records)` : "—" },
         { Metric: "Peak Check-In Hour", Value: peakCheckin?.Hour ?? "—" },
         { Metric: "Peak Activity Hour", Value: peakActivityTime?.Hour ?? "—" },
         { Metric: "Generated", Value: generatedAt },
@@ -834,6 +975,24 @@ export default function Dashboard() {
     }
   };
 
+  const rankedActivities = [...stats.activityRows].sort((a, b) => b.records - a.records);
+  const activityTableRows = [...stats.activityRows].sort((a, b) => b.records - a.records);
+  const totalRecords = activityTableRows.reduce((sum, row) => sum + row.records, 0);
+  const totalUniquePax = stats.uniqueParticipantsEngaged;
+  const comprehensiveChartHeight = Math.max(560, rankedActivities.length * 30);
+  const maxRankedRecords = rankedActivities.reduce((max, row) => Math.max(max, row.records), 0);
+  const xAxisMax = Math.max(10, Math.ceil(maxRankedRecords * 1.2));
+  const activityColorPalette = [
+    "#0ea5e9", // sky
+    "#22c55e", // green
+    "#f59e0b", // amber
+    "#a855f7", // violet
+    "#ec4899", // pink
+    "#14b8a6", // teal
+    "#6366f1", // indigo
+    "#84cc16", // lime
+  ];
+
   return (
     <AppLayout
       title="Dashboard"
@@ -907,83 +1066,29 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Stats row */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard title="Registered Participants" value={stats.totalRegistered} icon={Users} delay={0} />
-          <StatCard title="Checked-In Participants" value={stats.checkedIn} icon={UserCheck} delay={80} highlight />
-          <StatCard title="Unique Participants Engaged" value={stats.uniqueParticipantsEngaged} icon={Activity} delay={160} />
-          <StatCard title="Total Experiences" value={stats.totalExperiences} icon={Zap} delay={240} />
-          <StatCard
-            title="Avg Experiences / Participant"
-            value={stats.uniqueParticipantsEngaged > 0
-              ? parseFloat((stats.totalExperiences / stats.uniqueParticipantsEngaged).toFixed(1))
-              : 0}
-            icon={TrendingUp}
-            delay={320}
-            decimals={1}
-          />
-        </div>
-
-        {/* Consolidated analytics summary */}
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="glass-card rounded-2xl p-5 lg:col-span-2">
-            <p className="text-[10px] font-bold uppercase tracking-[3px] text-muted-foreground mb-4">
-              Overview
-            </p>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Peak Check-In Time</p>
-                <p className="text-lg font-bold text-foreground mt-1">{stats.peakCheckinHourLabel}</p>
-                <p className="text-xs text-muted-foreground">{stats.peakCheckinHourCount.toLocaleString()} arrivals</p>
-              </div>
-              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Peak Activity Time</p>
-                <p className="text-lg font-bold text-foreground mt-1">{stats.peakHourLabel}</p>
-                <p className="text-xs text-muted-foreground">{stats.peakHourCount.toLocaleString()} records</p>
-              </div>
-              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Peak Activity</p>
-                <p className="text-sm font-bold text-foreground mt-1 truncate">{stats.peakActivityName}</p>
-                <p className="text-xs text-muted-foreground">{stats.peakActivityCount.toLocaleString()} records</p>
-              </div>
-              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Scan Failed (Recovered)</p>
-                <p className="text-lg font-bold text-foreground mt-1">{stats.scanFailedRecovered.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground">QR registrations</p>
-              </div>
-              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Total Walk-Ins</p>
-                <p className="text-lg font-bold text-foreground mt-1">{stats.walkInTotal.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground">Participants, crew, providers</p>
-              </div>
-              <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">Check-In Rate</p>
-                <p className="text-lg font-bold text-foreground mt-1">
-                  {stats.totalRegistered > 0 ? Math.round((stats.checkedIn / stats.totalRegistered) * 100) : 0}%
-                </p>
-                <p className="text-xs text-muted-foreground">of registered participants</p>
+        {/* KPI row */}
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+          <StatCard title="Registered" value={stats.totalRegistered} icon={Users} delay={0} />
+          <StatCard title="Checked In" value={stats.checkedIn} icon={UserCheck} delay={60} highlight />
+          <StatCard title="Not Checked In" value={stats.notCheckedIn} icon={Activity} delay={120} />
+          <StatCard title="Activity Records" value={stats.totalExperiences} icon={Zap} delay={180} />
+          <div className="glass-card rounded-xl p-6 fade-in-up" style={{ animationDelay: "240ms" }}>
+            <div className="mb-4">
+              <div className="p-2.5 rounded-lg bg-secondary w-fit">
+                <Clock3 className="h-5 w-5 text-muted-foreground" />
               </div>
             </div>
+            <p className="text-3xl font-black tracking-tight text-foreground">{stats.peakCheckinHourLabel || "—"}</p>
+            <p className="text-xs font-semibold uppercase tracking-[2px] text-muted-foreground mt-1">Peak Check-In</p>
           </div>
-
-          <div className="glass-card rounded-2xl p-5">
-            <p className="text-[10px] font-bold uppercase tracking-[3px] text-muted-foreground mb-4">
-              By Group
-            </p>
-            {stats.byGroup.length > 0 ? (
-              <div className="space-y-2 max-h-72 overflow-auto pr-1">
-                {stats.byGroup.map((row) => (
-                  <div key={row.group} className="rounded-lg border border-border/50 bg-background/40 px-3 py-2 flex items-center justify-between">
-                    <span className="text-sm text-foreground truncate pr-3">{row.group}</span>
-                    <span className="text-sm font-bold text-foreground">{row.count.toLocaleString()}</span>
-                  </div>
-                ))}
+          <div className="glass-card rounded-xl p-6 fade-in-up" style={{ animationDelay: "300ms" }}>
+            <div className="mb-4">
+              <div className="p-2.5 rounded-lg bg-secondary w-fit">
+                <TrendingUp className="h-5 w-5 text-muted-foreground" />
               </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-border/60 bg-background/30 p-6 text-center text-sm text-muted-foreground">
-                No group analytics available yet.
-              </div>
-            )}
+            </div>
+            <p className="text-3xl font-black tracking-tight text-foreground">{stats.peakHourLabel || "—"}</p>
+            <p className="text-xs font-semibold uppercase tracking-[2px] text-muted-foreground mt-1">Peak Activity</p>
           </div>
         </div>
 
@@ -1050,7 +1155,7 @@ export default function Dashboard() {
                       cursor={{ stroke: "hsl(var(--destructive))", strokeWidth: 1, opacity: 0.25 }}
                       contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }}
                     />
-                    <Line type="monotone" dataKey="count" stroke="#ef4444" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 5 }} />
+                    <Line type="monotone" dataKey="count" stroke="#06b6d4" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 5 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -1062,160 +1167,114 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Check-In Analytics Section */}
-        {stats.peakCheckinHourCount > 0 && (() => {
-          const totalCheckins = stats.peakCheckinHourBuckets.reduce((sum, h) => sum + h.count, 0);
-          const peakHour = stats.peakCheckinHourBuckets.reduce((max, h) => h.count > max.count ? h : max);
-          const peakPercent = totalCheckins > 0 ? ((peakHour.count / totalCheckins) * 100).toFixed(1) : 0;
-
-          // Segment check-ins by time of day
-          const morning = stats.peakCheckinHourBuckets.filter(h => {
-            const hour = parseInt(h.hour);
-            return hour >= 6 && hour < 12;
-          }).reduce((sum, h) => sum + h.count, 0);
-
-          const afternoon = stats.peakCheckinHourBuckets.filter(h => {
-            const hour = parseInt(h.hour);
-            return hour >= 12 && hour < 17;
-          }).reduce((sum, h) => sum + h.count, 0);
-
-          const evening = stats.peakCheckinHourBuckets.filter(h => {
-            const hour = parseInt(h.hour);
-            return hour >= 17 && hour < 21;
-          }).reduce((sum, h) => sum + h.count, 0);
-
-          const night = stats.peakCheckinHourBuckets.filter(h => {
-            const hour = parseInt(h.hour);
-            return hour >= 21 || hour < 6;
-          }).reduce((sum, h) => sum + h.count, 0);
-
-          return (
-            <div className="glass-card rounded-2xl p-5">
-              <p className="text-[10px] font-bold uppercase tracking-[3px] text-muted-foreground mb-4">
-                Check-In Analytics
-              </p>
-
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-                <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                  <p className="text-[9px] font-bold uppercase tracking-[1.5px] text-muted-foreground mb-1">Morning (6 AM - 12 PM)</p>
-                  <p className="text-lg font-bold text-foreground">{morning.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground">{((morning / totalCheckins) * 100).toFixed(0)}% of total</p>
-                </div>
-
-                <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                  <p className="text-[9px] font-bold uppercase tracking-[1.5px] text-muted-foreground mb-1">Afternoon (12 PM - 5 PM)</p>
-                  <p className="text-lg font-bold text-foreground">{afternoon.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground">{((afternoon / totalCheckins) * 100).toFixed(0)}% of total</p>
-                </div>
-
-                <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                  <p className="text-[9px] font-bold uppercase tracking-[1.5px] text-muted-foreground mb-1">Evening (5 PM - 9 PM)</p>
-                  <p className="text-lg font-bold text-foreground">{evening.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground">{((evening / totalCheckins) * 100).toFixed(0)}% of total</p>
-                </div>
-
-                <div className="rounded-xl bg-background/50 p-3 border border-border/50">
-                  <p className="text-[9px] font-bold uppercase tracking-[1.5px] text-muted-foreground mb-1">Night (9 PM - 6 AM)</p>
-                  <p className="text-lg font-bold text-foreground">{night.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground">{((night / totalCheckins) * 100).toFixed(0)}% of total</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-xl bg-success/5 p-3 border border-success/20">
-                  <p className="text-[9px] font-bold uppercase tracking-[1.5px] text-success mb-1">Peak Hour</p>
-                  <p className="text-lg font-bold text-foreground">{peakHour.hour}</p>
-                  <p className="text-xs text-muted-foreground">{peakHour.count.toLocaleString()} arrivals ({peakPercent}%)</p>
-                </div>
-
-                <div className="rounded-xl bg-blue-500/5 p-3 border border-blue-500/20">
-                  <p className="text-[9px] font-bold uppercase tracking-[1.5px] text-blue-500 mb-1">Total Check-Ins</p>
-                  <p className="text-lg font-bold text-foreground">{totalCheckins.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground">Across {stats.peakCheckinHourBuckets.length} hours</p>
-                </div>
-
-                <div className="rounded-xl bg-amber-500/5 p-3 border border-amber-500/20">
-                  <p className="text-[9px] font-bold uppercase tracking-[1.5px] text-amber-500 mb-1">Avg Per Hour</p>
-                  <p className="text-lg font-bold text-foreground">{(totalCheckins / stats.peakCheckinHourBuckets.length).toFixed(0)}</p>
-                  <p className="text-xs text-muted-foreground">Average check-ins</p>
-                </div>
-              </div>
+        {/* Full analytics board */}
+        <div className="glass-card rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[3px] text-muted-foreground">Comprehensive Activity Analytics</p>
+              <p className="text-sm text-muted-foreground mt-1">Includes peak time, peak activity, by-group totals, scan failures, walk-ins, and full activity listing.</p>
             </div>
-          );
-        })()}
-
-        {/* Activity Participation grid */}
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-bold uppercase tracking-[2px] text-muted-foreground">
-              Activity Participation
-            </h3>
-            <div className="flex items-center gap-2">
-              {isAdmin && (
-                <Button
-                  variant="ghost" size="sm"
-                  onClick={() => setShowChart(v => !v)}
-                  className="gap-1.5 h-7 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  <BarChart2 className="h-3.5 w-3.5" />
-                  {showChart ? "Hide Chart" : "Show Chart"}
-                </Button>
-              )}
-              <div className="flex items-center gap-1.5 text-muted-foreground">
-                <ListChecks className="h-3.5 w-3.5" />
-                <span className="text-xs">{activeActivities.length} activities</span>
-              </div>
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">Recovered Scan Failed</p>
+              <p className="text-lg font-black text-foreground">{stats.scanFailedRecovered.toLocaleString()}</p>
+              <p className="text-xs text-muted-foreground mt-1">Walk-Ins: {stats.walkInTotal.toLocaleString()}</p>
             </div>
           </div>
 
-          {activeActivities.length > 0 ? (
+          {rankedActivities.length > 0 ? (
             <>
-              {/* Most / Least attended */}
-              {stats.totalExperiences > 0 && (() => {
-                const sorted = activeActivities
-                  .map(a => ({ ...a, count: stats.effectiveCounts[a.id] ?? 0 }))
-                  .sort((a, b) => b.count - a.count);
-                const most = sorted[0];
-                const least = sorted[sorted.length - 1];
-                return (
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div className="glass-card rounded-xl px-4 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-[2px] text-success mb-1">Most Attended</p>
-                      <p className="text-sm font-black text-foreground truncate">{most.name}</p>
-                      <p className="text-xs text-muted-foreground">{most.count.toLocaleString()} participants</p>
-                    </div>
-                    <div className="glass-card rounded-xl px-4 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground mb-1">Least Attended</p>
-                      <p className="text-sm font-black text-foreground truncate">{least.name}</p>
-                      <p className="text-xs text-muted-foreground">{least.count.toLocaleString()} participants</p>
-                    </div>
-                  </div>
-                );
-              })()}
+              <div style={{ height: `${comprehensiveChartHeight}px` }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={rankedActivities} layout="vertical" margin={{ top: 0, right: 120, left: 8, bottom: 0 }}>
+                    <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.25} />
+                    <XAxis
+                      type="number"
+                      domain={[0, xAxisMax]}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      width={200}
+                      interval={0}
+                      minTickGap={0}
+                      tick={{ fill: "hsl(var(--foreground))", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <RechartsTooltip
+                      contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }}
+                      formatter={(value: number) => [Number(value).toLocaleString(), "Records"]}
+                    />
+                    <Bar dataKey="records" name="Records" radius={[0, 5, 5, 0]} isAnimationActive={false}>
+                      {rankedActivities.map((row, idx) => (
+                        <Cell key={`${row.id}-${row.name}`} fill={activityColorPalette[idx % activityColorPalette.length]} />
+                      ))}
+                      <LabelList
+                        dataKey="records"
+                        position="right"
+                        formatter={(value: number) => Number(value).toLocaleString()}
+                        style={{ fill: "hsl(var(--foreground))", fontSize: 11, fontWeight: 700 }}
+                        offset={10}
+                      />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
 
-              {/* Cards grid */}
-              <ExperienceGrid
-                activities={activeActivities}
-                counts={stats.effectiveCounts}
-                totalCheckedIn={stats.checkedIn || 1}
-              />
-
-              {/* Bar Chart */}
-              {showChart && stats.totalExperiences > 0 && (
-                <div className="mt-4">
-                  <ActivityBarChart
-                    activities={activeActivities}
-                    counts={stats.effectiveCounts}
-                    totalExperiences={stats.totalExperiences}
-                    eventName={currentEventName ?? "Event"}
-                    canDownload={isAdmin}
-                  />
+              <div className="mt-4">
+                <p className="text-[10px] font-bold uppercase tracking-[3px] text-muted-foreground mb-3">Group Totals</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                  {stats.groupTotals.map((g) => (
+                    <div key={g.group} className="rounded-xl bg-background/40 border border-border/50 p-3">
+                      <p className="text-sm font-bold text-foreground truncate">{g.group}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{g.records.toLocaleString()} records</p>
+                    </div>
+                  ))}
                 </div>
-              )}
+              </div>
+
+              <div className="mt-4 rounded-xl border border-border/60 overflow-hidden">
+                <div className="px-4 py-3 border-b border-border/60 flex items-center justify-between bg-background/30">
+                  <p className="text-sm font-bold text-foreground">All {activityTableRows.length} Activities</p>
+                  <p className="text-xs text-muted-foreground">{activityTableRows.length}/{activities.length || activeActivities.length} configured</p>
+                </div>
+                <div className="overflow-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-background/30">
+                      <tr className="text-left text-xs text-muted-foreground uppercase tracking-[1.5px]">
+                        <th className="px-4 py-2">#</th>
+                        <th className="px-4 py-2">Activity</th>
+                        <th className="px-4 py-2">Group</th>
+                        <th className="px-4 py-2 text-right">Records</th>
+                        <th className="px-4 py-2 text-right">Unique Pax</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activityTableRows.map((row, idx) => (
+                        <tr key={row.id} className="border-t border-border/40">
+                          <td className="px-4 py-2 text-muted-foreground">{idx + 1}</td>
+                          <td className="px-4 py-2 text-foreground font-medium">{row.name}</td>
+                          <td className="px-4 py-2 text-muted-foreground">{row.group}</td>
+                          <td className="px-4 py-2 text-right text-foreground font-semibold">{row.records.toLocaleString()}</td>
+                          <td className="px-4 py-2 text-right text-foreground font-semibold">{row.uniquePax.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                      <tr className="border-t border-border bg-background/40">
+                        <td className="px-4 py-2" colSpan={3}><span className="font-bold text-foreground">Total</span></td>
+                        <td className="px-4 py-2 text-right"><span className="font-bold text-foreground">{totalRecords.toLocaleString()}</span></td>
+                        <td className="px-4 py-2 text-right"><span className="font-bold text-foreground">{totalUniquePax.toLocaleString()}</span></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </>
           ) : (
-            <div className="glass-card rounded-xl px-6 py-8 text-center text-muted-foreground text-sm">
-              No activities created yet for this event.
+            <div className="rounded-xl border border-dashed border-border/60 bg-background/30 p-8 text-center text-sm text-muted-foreground">
+              No activity analytics available yet.
             </div>
           )}
         </div>
