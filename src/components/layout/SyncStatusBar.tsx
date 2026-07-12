@@ -27,7 +27,6 @@ export function SyncStatusBar() {
     if (queueStats.walkIns > 0) parts.push(`${queueStats.walkIns} reg`);
     if (queueStats.checkIns > 0) parts.push(`${queueStats.checkIns} check-in${queueStats.checkIns > 1 ? "s" : ""}`);
     if (queueStats.activities > 0) parts.push(`${queueStats.activities} activit${queueStats.activities > 1 ? "ies" : "y"}`);
-    if ((queueStats.communications ?? 0) > 0) parts.push(`${queueStats.communications} msg${queueStats.communications === 1 ? "" : "s"}`);
 
     return (
       <div className={cn(
@@ -99,7 +98,6 @@ export function SyncStatusBar() {
     if (queueStats.walkIns > 0) parts.push(`${queueStats.walkIns} reg`);
     if (queueStats.checkIns > 0) parts.push(`${queueStats.checkIns} check-in${queueStats.checkIns > 1 ? "s" : ""}`);
     if (queueStats.activities > 0) parts.push(`${queueStats.activities} activit${queueStats.activities > 1 ? "ies" : "y"}`);
-    if ((queueStats.communications ?? 0) > 0) parts.push(`${queueStats.communications} msg${queueStats.communications === 1 ? "" : "s"}`);
     return (
       <>
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-400">

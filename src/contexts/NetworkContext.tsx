@@ -3,13 +3,12 @@ import {
   useRef, ReactNode,
 } from "react";
 import { flushQueue, getQueueStats, QueueStats } from "@/lib/offlineStore";
-import { flushOfflineMessages, getPendingMessagesCount } from "@/lib/commOfflineQueue";
 import { speak, VM } from "@/lib/voice";
 
 // Exponential-backoff delays for auto-retry after failure (ms)
 const RETRY_DELAYS = [5_000, 15_000, 30_000, 60_000];
 
-const EMPTY_STATS: QueueStats = { total: 0, walkIns: 0, checkIns: 0, activities: 0, communications: 0 };
+const EMPTY_STATS: QueueStats = { total: 0, walkIns: 0, checkIns: 0, activities: 0 };
 
 interface NetworkState {
   online: boolean;
@@ -62,15 +61,8 @@ export const NetworkProvider = ({ children }: { children: ReactNode }) => {
 
   const refreshPending = useCallback(async () => {
     try {
-      const [stats, commPending] = await Promise.all([
-        getQueueStats(),
-        getPendingMessagesCount(),
-      ]);
-      setQueueStats({
-        ...stats,
-        total: stats.total + commPending,
-        communications: commPending,
-      });
+      const stats = await getQueueStats();
+      setQueueStats(stats);
     } catch { /* IDB not ready */ }
   }, []);
 
@@ -100,11 +92,8 @@ export const NetworkProvider = ({ children }: { children: ReactNode }) => {
 
   const triggerSync = useCallback(async () => {
     if (isSyncingRef.current) return;       // prevent concurrent calls
-    const [stats, commPending] = await Promise.all([
-      getQueueStats(),
-      getPendingMessagesCount(),
-    ]);
-    if (stats.total === 0 && commPending === 0) return;
+    const stats = await getQueueStats();
+    if (stats.total === 0) return;
 
     isSyncingRef.current = true;
     setSyncing(true);
@@ -114,9 +103,8 @@ export const NetworkProvider = ({ children }: { children: ReactNode }) => {
 
     try {
       const result = await flushQueue();
-      const commResult = await flushOfflineMessages();
-      const totalFailed = result.failed + commResult.failed;
-      const totalSynced = result.synced + commResult.sent;
+      const totalFailed = result.failed;
+      const totalSynced = result.synced;
 
       if (totalFailed > 0) {
         setSyncError(true);

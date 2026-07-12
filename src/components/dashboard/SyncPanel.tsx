@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   RefreshCw, AlertTriangle, CheckCircle2, Inbox, Trash2, X,
-  Users, Activity, UserCheck, ChevronDown, ChevronUp, MessageSquare,
+  Users, Activity, UserCheck, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   getQueueStats, getSyncQueueItems, dismissAllFailed, dismissSyncMutation,
   flushQueue, QueueStats, SyncMutation,
 } from "@/lib/offlineStore";
-import { getPendingMessagesCount } from "@/lib/commOfflineQueue";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { cn } from "@/lib/utils";
 
@@ -27,19 +26,18 @@ const TYPE_LABELS: Record<string, string> = {
 export function SyncPanel() {
   const { online } = useNetwork();
 
-  const [stats, setStats] = useState<QueueStats>({ total: 0, walkIns: 0, checkIns: 0, activities: 0, communications: 0 });
+  const [stats, setStats] = useState<QueueStats>({ total: 0, walkIns: 0, checkIns: 0, activities: 0 });
   const [items, setItems] = useState<SyncMutation[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [flushing, setFlushing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [q, i, commPending] = await Promise.all([
+    const [q, i] = await Promise.all([
       getQueueStats(),
       getSyncQueueItems(),
-      getPendingMessagesCount(),
     ]);
-    setStats({ ...q, total: q.total + commPending, communications: commPending });
+    setStats(q);
     setItems(i);
   }, []);
 
@@ -102,7 +100,6 @@ export function SyncPanel() {
             {stats.walkIns > 0 && <span className="flex items-center gap-1"><Users className="h-3 w-3" />{stats.walkIns} walk-ins</span>}
             {stats.checkIns > 0 && <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" />{stats.checkIns} check-ins</span>}
             {stats.activities > 0 && <span className="flex items-center gap-1"><Activity className="h-3 w-3" />{stats.activities} activities</span>}
-            {(stats.communications ?? 0) > 0 && <span className="flex items-center gap-1"><MessageSquare className="h-3 w-3" />{stats.communications} messages</span>}
           </div>
 
           {failedItems.length > 0 && (
