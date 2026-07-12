@@ -2,13 +2,12 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useGuest } from "@/contexts/GuestContext";
 import { useEvent } from "@/contexts/EventContext";
-import { useCommunications } from "@/contexts/CommunicationsContext";
 import { SoulcommsLogo } from "@/components/brand/SoulcommsLogo";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, ScanLine, Zap, Users, Trophy, Upload, LogOut, X, UserCog,
   Briefcase, HardHat, Radio, Monitor, ExternalLink, CalendarDays, ChevronDown,
-  ListChecks, MessageSquare, HeartPulse, BarChart3,
+  ListChecks, HeartPulse, BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
@@ -24,7 +23,6 @@ const navGroups = [
       { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", roles: ["admin", "checkin_officer", "activity_coordinator"] },
       { to: "/checkin", icon: ScanLine, label: "Check-In Station", roles: ["admin", "checkin_officer", "activity_coordinator"] },
       { to: "/activity", icon: Zap, label: "Activity Recorder", roles: ["admin", "checkin_officer", "activity_coordinator"] },
-      { to: "/communications", icon: MessageSquare, label: "Communications", roles: ["admin", "event_admin", "checkin_officer", "activity_coordinator", "crew_manager", "sp_manager", "viewer"] },
     ],
   },
   {
@@ -55,7 +53,6 @@ export const Sidebar = ({ onClose }: SidebarProps) => {
   const { profile, role, signOut } = useAuth();
   const { isGuestMode, guestSession, clearGuestSession } = useGuest();
   const { activeEvent, events, setActiveEvent } = useEvent();
-  const { totalUnread, mentionCount } = useCommunications();
   const navigate = useNavigate();
   const [showEventPicker, setShowEventPicker] = useState(false);
 
@@ -230,11 +227,6 @@ export const Sidebar = ({ onClose }: SidebarProps) => {
                   >
                     <Icon className="h-4 w-4 shrink-0" />
                     {label}
-                    {to === "/communications" && (totalUnread > 0 || mentionCount > 0) && (
-                      <span className="ml-auto bg-destructive text-destructive-foreground text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
-                        {mentionCount > 0 ? mentionCount : totalUnread > 99 ? "99+" : totalUnread}
-                      </span>
-                    )}
                   </NavLink>
                 ))}
               </div>

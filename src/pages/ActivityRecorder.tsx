@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { QrScannerModal } from "@/components/checkin/QrScannerModal";
 import {
   CheckCircle, XCircle, RotateCcw, Zap, QrCode,
-  MessageSquare, Phone, User, Hash, CheckCircle2, ListChecks,
+  Phone, User, Hash, CheckCircle2, ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -20,7 +20,6 @@ import {
   getAllWalkIns, getOfflineParticipants, getSyncQueueItems,
 } from "@/lib/offlineStore";
 import { speak, VM } from "@/lib/voice";
-import { useNavigate } from "react-router-dom";
 import { trackEvent } from "@enter-pro/analytics-sdk";
 import { recordActivityCheckin } from "@/lib/activityTimeTracking";
 
@@ -1253,11 +1252,6 @@ export default function ActivityRecorder() {
                       <p className="text-xs text-destructive font-medium">Not checked in — direct to Check-In Station first.</p>
                     </div>
                   </div>
-                  <Button variant="outline" size="sm"
-                    onClick={() => navigate(`/communications?escalate=activity&participant=${encodeURIComponent(foundParticipant.name)}&error=${encodeURIComponent("Not checked in")}`)}
-                    className="w-full gap-2 border-destructive/30 text-destructive hover:bg-destructive/10">
-                    <MessageSquare className="h-3.5 w-3.5" />Escalate
-                  </Button>
                 </div>
               )}
               {findStatus === "error" && (

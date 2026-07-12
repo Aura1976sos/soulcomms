@@ -8,7 +8,6 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { EventProvider } from "./contexts/EventContext";
 import { NetworkProvider } from "./contexts/NetworkContext";
 import { ActivitiesProvider } from "./contexts/ActivitiesContext";
-import { CommunicationsProvider } from "./contexts/CommunicationsContext";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { GuestProvider } from "./contexts/GuestContext";
 
@@ -27,13 +26,11 @@ const App = () => (
           <EventProvider>
             <ActivitiesProvider>
               <NetworkProvider>
-                <CommunicationsProvider>
-                  <TooltipProvider>
-                    <Toaster />
-                    <Sonner />
-                    <RouterProvider router={router} />
-                  </TooltipProvider>
-                </CommunicationsProvider>
+                <TooltipProvider>
+                  <Toaster />
+                  <Sonner />
+                  <RouterProvider router={router} />
+                </TooltipProvider>
               </NetworkProvider>
             </ActivitiesProvider>
           </EventProvider>

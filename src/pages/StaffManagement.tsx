@@ -8,11 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { useNavigate } from "react-router-dom";
 import {
   UserPlus, Search, RefreshCw, Pencil, Trash2,
   ToggleLeft, ToggleRight, X, CheckCircle, AlertTriangle,
-  Users, Clock, History, Eye, EyeOff, LogOut, ShieldAlert, Wifi, MessageSquare,
+  Users, Clock, History, Eye, EyeOff, LogOut, ShieldAlert, Wifi,
 } from "lucide-react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -463,12 +462,6 @@ export default function StaffManagement() {
                       {/* Actions */}
                       {!isSelf && (
                         <div className="flex items-center gap-0.5 shrink-0">
-                          <button
-                            onClick={() => navigate(`/communications?startDm=${s.id}`)}
-                            title="Send direct message"
-                            className="p-2 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
-                            <MessageSquare className="h-3.5 w-3.5" />
-                          </button>
                           <button onClick={() => openEdit(s)} title="Edit profile" disabled={!!busy}
                             className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                             <Pencil className="h-3.5 w-3.5" />

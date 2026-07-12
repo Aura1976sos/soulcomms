@@ -15,7 +15,7 @@ import { QrRegisterModal } from "@/components/checkin/QrRegisterModal";
 import { BulkCheckInModal } from "@/components/checkin/BulkCheckInModal";
 import {
   CheckCircle, XCircle, ScanLine, RotateCcw, AlertTriangle,
-  Users, Briefcase, HardHat, QrCode, Keyboard, UserPlus, MessageSquare,
+  Users, Briefcase, HardHat, QrCode, Keyboard, UserPlus,
   ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,6 @@ import {
   localCheckIn, queueMutation,
 } from "@/lib/offlineStore";
 import { speak, VM } from "@/lib/voice";
-import { useNavigate } from "react-router-dom";
 import { trackEvent } from "@enter-pro/analytics-sdk";
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -689,13 +688,6 @@ export default function CheckIn() {
               className={cn("w-full gap-2 border-border", attendeeType === "participant" ? "mt-2" : "mt-4")}>
               <RotateCcw className="h-4 w-4" /> Try Again
             </Button>
-            <Button
-              variant="outline"
-              onClick={() => navigate(`/communications?escalate=checkin&code=${encodeURIComponent(code)}&error=${encodeURIComponent("Not found in database")}`)}
-              className="w-full mt-2 gap-2 border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive hover:text-destructive"
-            >
-              <MessageSquare className="h-4 w-4" /> Request Assistance
-            </Button>
           </div>
         )}
 
@@ -712,13 +704,6 @@ export default function CheckIn() {
             </div>
             <Button variant="outline" onClick={handleReset} className="w-full mt-4 gap-2 border-border">
               <RotateCcw className="h-4 w-4" /> Try Again
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => navigate(`/communications?escalate=checkin&code=${encodeURIComponent(code)}&error=${encodeURIComponent(errorMsg || "Unexpected error")}`)}
-              className="w-full mt-2 gap-2 border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive hover:text-destructive"
-            >
-              <MessageSquare className="h-4 w-4" /> Request Assistance
             </Button>
           </div>
         )}

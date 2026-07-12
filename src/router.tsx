@@ -28,7 +28,6 @@ const ImportServiceProviders = lazy(() => import("./pages/ImportServiceProviders
 const ImportCrew = lazy(() => import("./pages/ImportCrew"));
 const StaffManagement = lazy(() => import("./pages/StaffManagement"));
 const Events = lazy(() => import("./pages/Events"));
-const Communications = lazy(() => import("./pages/Communications"));
 const SystemHealth = lazy(() => import("./pages/SystemHealth"));
 
 // ── Suspense wrapper helper ────────────────────────────────────────────────────
@@ -79,7 +78,7 @@ export const routers = [
   },
   {
     path: "/communications", name: "communications",
-    element: <Lazy><ProtectedRoute><Communications /></ProtectedRoute></Lazy>,
+    element: <Navigate to="/dashboard" replace />,
   },
 
   // ── Admin-only pages (no guest access) ────────────────────────────────────────
