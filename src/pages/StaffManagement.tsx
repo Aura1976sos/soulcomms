@@ -123,7 +123,6 @@ export default function StaffManagement() {
   const { user } = useAuth();
   const { events } = useEvent();
   const { toast } = useToast();
-  const navigate = useNavigate();
 
   const [tab, setTab] = useState<Tab>("directory");
   const [staff, setStaff] = useState<StaffMember[]>([]);
