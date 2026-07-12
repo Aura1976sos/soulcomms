@@ -61,7 +61,8 @@ interface ConsolidatedExportData {
     id: string;
     code: string;
     name: string;
-    department: string | null;
+    department?: string | null;
+    team_name?: string | null;
     phone: string | null;
     is_checked_in: boolean;
     check_in_method: string | null;
@@ -344,20 +345,29 @@ export default function Dashboard() {
       return { participantRows: [], crewRows: [], serviceProviderRows: [] };
     }
 
-    const [participantsRes, crewRes, serviceProvidersRes] = await Promise.all([
+    const [participantsRes, serviceProvidersRes] = await Promise.all([
       supabase
         .from("participants")
         .select("id, code, name, phone, source, is_checked_in, check_in_method, checked_in_at")
-        .eq("event_id", currentEventId),
-      supabase
-        .from("crew_members")
-        .select("id, code, name, department, phone, is_checked_in, check_in_method, checked_in_at")
         .eq("event_id", currentEventId),
       supabase
         .from("service_providers")
         .select("id, code, brand_name, contact_person, phone, is_checked_in, check_in_method, checked_in_at")
         .eq("event_id", currentEventId),
     ]);
+
+    let crewRes = await supabase
+      .from("crew_members")
+      .select("id, code, name, department, phone, is_checked_in, check_in_method, checked_in_at")
+      .eq("event_id", currentEventId);
+
+    // Schema fallback for older environments still using team_name instead of department.
+    if (crewRes.error && /department/i.test(crewRes.error.message)) {
+      crewRes = await supabase
+        .from("crew_members")
+        .select("id, code, name, team_name, phone, is_checked_in, check_in_method, checked_in_at")
+        .eq("event_id", currentEventId);
+    }
 
     if (participantsRes.error) throw new Error(participantsRes.error.message);
     if (crewRes.error) throw new Error(crewRes.error.message);
@@ -715,7 +725,7 @@ export default function Dashboard() {
               Type: "Crew",
               Code: row.code,
               NameOrBrand: row.name,
-              TeamOrContact: row.department ?? "",
+              TeamOrContact: row.department ?? row.team_name ?? "",
               Phone: row.phone ?? "",
               CheckInMethod: row.check_in_method ?? "",
               CheckedIn: row.is_checked_in ? "Yes" : "No",
