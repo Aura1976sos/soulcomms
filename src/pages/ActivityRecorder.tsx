@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEvent } from "@/contexts/EventContext";
+import { useNavigate } from "react-router-dom";
 import { useGuest } from "@/contexts/GuestContext";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useActivities, Activity } from "@/contexts/ActivitiesContext";
