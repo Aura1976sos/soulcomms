@@ -92,87 +92,165 @@ async function findParticipantOnlineByQrOrCode(raw: string, eventId: string, met
   const trimmed = raw.trim();
   const padded = /^\d+$/.test(trimmed) ? trimmed.padStart(4, "0") : trimmed;
 
+  const buildQuery = (scopeEventId: string | null) => {
+    const base = supabase.from("participants")
+      .select("id, code, name, phone, is_checked_in");
+    return scopeEventId ? base.eq("event_id", scopeEventId) : base;
+  };
+
   if (method === "qr") {
     const { data: qrData, error: qrError } = await withTimeout(
-      supabase.from("participants")
-        .select("id, code, name, phone, is_checked_in")
-        .eq("event_id", eventId)
+      buildQuery(eventId)
         .eq("qr_link", trimmed)
         .limit(1)
         .maybeSingle()
     );
     if (qrError) throw new Error(qrError.message);
     if (qrData) return qrData;
+
+    if (eventId) {
+      const { data: fallbackQrData, error: fallbackQrError } = await withTimeout(
+        buildQuery(null)
+          .eq("qr_link", trimmed)
+          .limit(1)
+          .maybeSingle()
+      );
+      if (fallbackQrError) throw new Error(fallbackQrError.message);
+      if (fallbackQrData) return fallbackQrData;
+    }
   }
 
   const { data, error } = await withTimeout(
-    supabase.from("participants")
-      .select("id, code, name, phone, is_checked_in")
-      .eq("event_id", eventId)
+    buildQuery(eventId)
       .or(`code.eq.${trimmed},code.eq.${padded}`)
       .limit(1)
       .maybeSingle()
   );
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return data;
+
+  if (eventId) {
+    const { data: fallbackData, error: fallbackError } = await withTimeout(
+      buildQuery(null)
+        .or(`code.eq.${trimmed},code.eq.${padded}`)
+        .limit(1)
+        .maybeSingle()
+    );
+    if (fallbackError) throw new Error(fallbackError.message);
+    return fallbackData;
+  }
+
+  return null;
 }
 
 async function findServiceProviderOnlineByQrOrCode(raw: string, eventId: string, method: InputMethod) {
   const trimmed = raw.trim();
   const padded = /^\d+$/.test(trimmed) ? trimmed.padStart(4, "0") : trimmed;
 
+  const buildQuery = (scopeEventId: string | null) => {
+    const base = supabase.from("service_providers")
+      .select("id, code, brand_name, contact_person, is_checked_in");
+    return scopeEventId ? base.eq("event_id", scopeEventId) : base;
+  };
+
   if (method === "qr") {
     const { data: qrData, error: qrError } = await withTimeout(
-      supabase.from("service_providers")
-        .select("id, code, brand_name, contact_person, is_checked_in")
-        .eq("event_id", eventId)
+      buildQuery(eventId)
         .eq("qr_link", trimmed)
         .limit(1)
         .maybeSingle()
     );
     if (qrError) throw new Error(qrError.message);
     if (qrData) return qrData;
+
+    if (eventId) {
+      const { data: fallbackQrData, error: fallbackQrError } = await withTimeout(
+        buildQuery(null)
+          .eq("qr_link", trimmed)
+          .limit(1)
+          .maybeSingle()
+      );
+      if (fallbackQrError) throw new Error(fallbackQrError.message);
+      if (fallbackQrData) return fallbackQrData;
+    }
   }
 
   const { data, error } = await withTimeout(
-    supabase.from("service_providers")
-      .select("id, code, brand_name, contact_person, is_checked_in")
-      .eq("event_id", eventId)
+    buildQuery(eventId)
       .or(`code.eq.${trimmed},code.eq.${padded}`)
       .limit(1)
       .maybeSingle()
   );
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return data;
+
+  if (eventId) {
+    const { data: fallbackData, error: fallbackError } = await withTimeout(
+      buildQuery(null)
+        .or(`code.eq.${trimmed},code.eq.${padded}`)
+        .limit(1)
+        .maybeSingle()
+    );
+    if (fallbackError) throw new Error(fallbackError.message);
+    return fallbackData;
+  }
+
+  return null;
 }
 
 async function findCrewOnlineByQrOrCode(raw: string, eventId: string, method: InputMethod) {
   const trimmed = raw.trim();
   const padded = /^\d+$/.test(trimmed) ? trimmed.padStart(4, "0") : trimmed;
 
+  const buildQuery = (scopeEventId: string | null) => {
+    const base = supabase.from("crew_members")
+      .select("id, code, name, department, is_checked_in");
+    return scopeEventId ? base.eq("event_id", scopeEventId) : base;
+  };
+
   if (method === "qr") {
     const { data: qrData, error: qrError } = await withTimeout(
-      supabase.from("crew_members")
-        .select("id, code, name, department, is_checked_in")
-        .eq("event_id", eventId)
+      buildQuery(eventId)
         .eq("qr_link", trimmed)
         .limit(1)
         .maybeSingle()
     );
     if (qrError) throw new Error(qrError.message);
     if (qrData) return qrData;
+
+    if (eventId) {
+      const { data: fallbackQrData, error: fallbackQrError } = await withTimeout(
+        buildQuery(null)
+          .eq("qr_link", trimmed)
+          .limit(1)
+          .maybeSingle()
+      );
+      if (fallbackQrError) throw new Error(fallbackQrError.message);
+      if (fallbackQrData) return fallbackQrData;
+    }
   }
 
   const { data, error } = await withTimeout(
-    supabase.from("crew_members")
-      .select("id, code, name, department, is_checked_in")
-      .eq("event_id", eventId)
+    buildQuery(eventId)
       .or(`code.eq.${trimmed},code.eq.${padded}`)
       .limit(1)
       .maybeSingle()
   );
   if (error) throw new Error(error.message);
-  return data;
+  if (data) return data;
+
+  if (eventId) {
+    const { data: fallbackData, error: fallbackError } = await withTimeout(
+      buildQuery(null)
+        .or(`code.eq.${trimmed},code.eq.${padded}`)
+        .limit(1)
+        .maybeSingle()
+    );
+    if (fallbackError) throw new Error(fallbackError.message);
+    return fallbackData;
+  }
+
+  return null;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -205,7 +283,9 @@ export default function CheckIn() {
 
   const cfg = TYPE_CONFIG[attendeeType];
   const totalCheckedIn = counts.participant + counts.service_provider + counts.crew;
-  const eventId = isGuestMode ? guestSession?.eventId ?? "" : activeEvent?.id ?? "";
+  const eventId = isGuestMode
+    ? (guestSession?.eventId ?? "")
+    : (activeEvent?.id ?? (typeof window !== "undefined" ? window.localStorage.getItem("soulcomms_active_event_id") ?? "" : ""));
 
   // ── Voice announcements ───────────────────────────────────────────────────
   useEffect(() => {

@@ -578,15 +578,22 @@ export default function ActivityRecorder() {
       let participant: FoundParticipant | null = null;
       const localMatch = searchLocalParticipant(localParticipantsRef.current, trimmed, eventId);
 
-      if (localMatch) {
+      if (online) {
+        participant = await lookupParticipantOnline(trimmed, eventId);
+        if (!participant && localMatch) {
+          participant = localMatch;
+        }
+      } else if (localMatch) {
         participant = localMatch;
-      } else if (!online) {
+      } else {
         const cached = await offlineLookupParticipant(trimmed, eventId);
         if (!cached) { setFindStatus("not_found"); return; }
         participant = { id: cached.id, code: cached.code, name: cached.name, phone: cached.phone, is_checked_in: cached.is_checked_in };
-      } else {
-        participant = await lookupParticipantOnline(trimmed, eventId);
-        if (!participant) { setFindStatus("not_found"); return; }
+      }
+
+      if (!participant) {
+        setFindStatus("not_found");
+        return;
       }
 
       await applyParticipantSelection(participant);
@@ -604,16 +611,17 @@ export default function ActivityRecorder() {
     if (!trimmed || !eventId) return null;
 
     const localMatch = searchLocalParticipant(localParticipantsRef.current, trimmed, eventId);
-    if (localMatch) return localMatch;
-
-    if (!online) {
-      const cached = await offlineLookupParticipant(trimmed, eventId);
-      return cached
-        ? { id: cached.id, code: cached.code, name: cached.name, phone: cached.phone, is_checked_in: cached.is_checked_in }
-        : null;
+    if (online) {
+      const remote = await lookupParticipantOnline(trimmed, eventId);
+      return remote ?? localMatch;
     }
 
-    return lookupParticipantOnline(trimmed, eventId);
+    if (localMatch) return localMatch;
+
+    const cached = await offlineLookupParticipant(trimmed, eventId);
+    return cached
+      ? { id: cached.id, code: cached.code, name: cached.name, phone: cached.phone, is_checked_in: cached.is_checked_in }
+      : null;
   }, [eventId, online]);
 
   const handleBulkRecord = useCallback(async () => {
@@ -840,11 +848,18 @@ export default function ActivityRecorder() {
     setLoading(true);
     setSuggestions([]);
     try {
+      if (online && eventId) {
+        const refreshed = await lookupParticipantOnline(participant.code || participant.phone || participant.name, eventId);
+        if (refreshed) {
+          await applyParticipantSelection(refreshed);
+          return;
+        }
+      }
       await applyParticipantSelection(participant);
     } finally {
       setLoading(false);
     }
-  }, [applyParticipantSelection]);
+  }, [applyParticipantSelection, online, eventId]);
 
   const handleQrScan = (value: string) => {
     setQuery(value);

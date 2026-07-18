@@ -144,11 +144,19 @@ export default function ImportParticipants() {
 
   // ── Get next available code from DB ────────────────────────────────
   const getNextCode = useCallback(async (count: number): Promise<string[]> => {
-    const { data } = await supabase
+    const currentEventId = activeEvent?.id ?? (typeof window !== "undefined" ? window.localStorage.getItem("soulcomms_active_event_id") : null) ?? null;
+
+    let query = supabase
       .from("participants")
       .select("code")
       .order("created_at", { ascending: false })
       .limit(1000);
+
+    if (currentEventId) {
+      query = query.eq("event_id", currentEventId);
+    }
+
+    const { data } = await query;
 
     const existingNums = (data ?? [])
       .map((r: { code: string }) => parseInt(r.code, 10))
@@ -266,6 +274,8 @@ export default function ImportParticipants() {
     if (queue.length === 0) return;
     setImporting(true);
 
+    const currentEventId = activeEvent?.id ?? (typeof window !== "undefined" ? window.localStorage.getItem("soulcomms_active_event_id") : null) ?? null;
+
     const invalid: RowError[] = [];
     const valid: ParticipantRow[] = [];
     queue.forEach((row, idx) => {
@@ -283,24 +293,55 @@ export default function ImportParticipants() {
     // Check for duplicate codes already in DB in manageable batches
     const codesToCheck = valid.map(r => r.code);
     const existingCodes = new Set<string>();
+    const existingNullEventIds: string[] = [];
     const duplicateBatchSize = 200;
     for (let i = 0; i < codesToCheck.length; i += duplicateBatchSize) {
       const batch = codesToCheck.slice(i, i + duplicateBatchSize);
-      const { data: existingRows, error } = await supabase
+      let query = supabase
         .from("participants")
-        .select("code")
+        .select("id, code, event_id")
         .in("code", batch);
+
+      if (currentEventId) {
+        query = query.or(`event_id.eq.${currentEventId},event_id.is.null`);
+      }
+
+      const { data: existingRows, error } = await query;
       if (error) {
         toast({ title: "Unable to check duplicate codes", description: error.message, variant: "destructive" });
         console.error("Duplicate code check error", error);
         setImporting(false);
         return;
       }
-      (existingRows ?? []).forEach((r: { code: string }) => existingCodes.add(r.code));
+
+      (existingRows ?? []).forEach((r: { code: string; event_id: string | null }) => {
+        existingCodes.add(r.code);
+        if (!r.event_id) existingNullEventIds.push(r.code);
+      });
     }
 
     const duplicates = valid.filter(r => existingCodes.has(r.code)).map(r => r.code);
     const toInsert = valid.filter(r => !existingCodes.has(r.code));
+
+    if (existingNullEventIds.length > 0) {
+      const nullEventRows = await supabase
+        .from("participants")
+        .select("id, code")
+        .in("code", existingNullEventIds)
+        .is("event_id", null);
+
+      const nullEventIds = (nullEventRows.data ?? []).map((r: { id: string }) => r.id);
+      if (nullEventIds.length > 0) {
+        const { error: updateError } = await supabase
+          .from("participants")
+          .update({ event_id: currentEventId })
+          .in("id", nullEventIds);
+
+        if (updateError) {
+          console.error("Failed to assign imported participants to the active event", updateError);
+        }
+      }
+    }
 
     // Bulk insert in chunks of 100
     const inserted: ParticipantRow[] = [];
@@ -314,7 +355,7 @@ export default function ImportParticipants() {
           name: r.name,
           phone: r.phone || null,
           qr_link: r.qr_link || null,
-          event_id: activeEvent?.id ?? null,
+          event_id: currentEventId,
         })))
         .select("code, name, phone, qr_link");
       if (error) {
